@@ -1,0 +1,1 @@
+rootProject.name = "maxmind-geoip2-csv2sql-converter"
