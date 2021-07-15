@@ -45,6 +45,8 @@ public class ManualTest {
 //        args.setApiURI();
         args.setDeleteCSVs(false);
         args.setDeleteScripts(false);
+//        args.setDeleteCSVs(true);
+//        args.setDeleteScripts(true);
         registry.allocateRegistrySettings();
         args.setSourceArchiveURI(resourceTestsDirPath.resolve(buildArchiveName(registry.getEditionId())).toString());
 
