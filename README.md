@@ -5,7 +5,7 @@
   (Example: If MySQL server `max_allowed_packet` parameter is too small - [64 MB by default](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_max_allowed_packet))
 * Appends emoji country flags 🇦🇩 🇦🇪 🇦🇫 🇦🇬 🇦🇮 🇦🇱 🇦🇲 🇦🇴 🇦🇶 🇦🇷 🇦🇸 🇦🇹 🇦🇺 🇦🇼 🇦🇽 🇦🇿 🇧🇦 🇧🇧 🇧🇩 🇧🇪 🇧🇫 🇧🇬 🇧🇭 🇧🇮 🇧🇯 🇧🇱 🇧🇲 🇧🇳 🇧🇴 🇧🇶 🇧🇷 🇧🇸 🇧🇹 🇧🇻 🇧🇼 🇧🇾...
 * Supports MaxMind edition IDs: `GeoLite2-Country-CSV, GeoLite2-City-CSV`; `IPv4, IPv6`; Locations locale codes: `en, ru, de, es, fr, ja, pt-BR, zh-CN`
-* Provides configuration files and template engine syntax for build DDL/DML for MySQL/PostgreSQL/Microsoft SQL Server 2019/your custom. For custom DBMS, you can write a template yourself.
+* Provides [template-ready configuration files](https://github.com/mbto/maxmind-geoip2-csv2sql-converter/tree/master/src/main/resources) for `MySQL 8/PostgreSQL 13/Microsoft SQL Server 2019` and template engine with simple syntax for build DDL/DML. For custom DBMS, you can write a template yourself.
 * Win/Unix distribution
 
 #### Requirements:
@@ -24,6 +24,6 @@
 * Requirements:
     * Gradle 5.4+
 * With tests:
-    * gradle build
+    * gradlew.bat build
 * Without tests:
-    * gradle build -x test
+    * gradlew.bat build -x test

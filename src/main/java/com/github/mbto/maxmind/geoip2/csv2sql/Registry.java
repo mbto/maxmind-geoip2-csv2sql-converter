@@ -79,11 +79,11 @@ public class Registry {
     }
 
     public void allocateScriptsPath() throws IOException {
-        String archiveNameWithoutDot = archivePath.getFileName().toString();
-        int dot = archiveNameWithoutDot.lastIndexOf('.');
-        archiveNameWithoutDot = dot > -1 ? archiveNameWithoutDot.substring(0, dot) : archiveNameWithoutDot;
-        scriptsPath = args.getOutputDirPath().resolve(archiveNameWithoutDot);
-        if (Files.notExists(scriptsPath))
+//        String archiveNameWithoutDot = archivePath.getFileName().toString();
+//        int dot = archiveNameWithoutDot.lastIndexOf('.');
+//        archiveNameWithoutDot = dot > -1 ? archiveNameWithoutDot.substring(0, dot) : archiveNameWithoutDot;
+        scriptsPath = args.getOutputDirPath();//.resolve(archiveNameWithoutDot);
+        if (!Files.isDirectory(scriptsPath))
             Files.createDirectories(scriptsPath);
         System.out.println("Resolved scripts path '" + scriptsPath + "'");
 

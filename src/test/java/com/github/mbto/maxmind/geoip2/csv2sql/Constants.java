@@ -57,10 +57,9 @@ public interface Constants {
         return testId.isEmpty() ? integrationTestsDirPath.toString() : integrationTestsDirPath.resolve(testId).toString();
     }
 
-    static Path buildFullArchivePath(String editionId, String testId) {
+    static Path buildFullArchivePath(String testId) {
         return integrationTestsDirPath
                 .resolve(testId)
-                .resolve(editionId + "_" + archiveDate)
                 .resolve(resultArchiveName);
     }
 
@@ -94,7 +93,7 @@ public interface Constants {
             t = e;
         }
 
-        Path fullArchivePath = buildFullArchivePath(editionId, testId);
+        Path fullArchivePath = buildFullArchivePath(testId);
         Assert.assertTrue("Path '" + fullArchivePath + "' not a file", Files.exists(fullArchivePath) && Files.isRegularFile(fullArchivePath));
 
         long actualArchiveFileSize = Files.size(fullArchivePath);
@@ -109,8 +108,8 @@ public interface Constants {
                             "),\n\t\t\t\t\t\t" + actualArchiveFileSize + "},")));
         }
         if (delete) {
-            // Deleting testId direcroty from: R:\IntegrationTests\SOFTWARE_NAME\testId\editionId + archiveDate\resultArchiveName
-            deleteRecursive(fullArchivePath.getParent().getParent());
+            // Deleting testId direcroty from: R:\IntegrationTests\SOFTWARE_NAME\testId\resultArchiveName
+            deleteRecursive(fullArchivePath.getParent());
         }
         Assert.assertNull(t);
         Assert.assertNotNull(application);
