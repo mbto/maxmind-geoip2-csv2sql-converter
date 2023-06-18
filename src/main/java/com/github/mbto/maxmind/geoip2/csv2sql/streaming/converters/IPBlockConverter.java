@@ -3,7 +3,6 @@ package com.github.mbto.maxmind.geoip2.csv2sql.streaming.converters;
 import com.github.jgonian.ipmath.AbstractIpRange;
 import com.github.jgonian.ipmath.Ipv4Range;
 import com.github.jgonian.ipmath.Ipv6Range;
-import com.github.jgonian.ipmath.Range;
 import com.github.mbto.maxmind.geoip2.csv2sql.Registry;
 import com.github.mbto.maxmind.geoip2.csv2sql.streaming.BRWrapper;
 import com.github.mbto.maxmind.geoip2.csv2sql.streaming.Location.IPBlock;
@@ -21,7 +20,8 @@ import java.util.function.Function;
 import static com.github.mbto.maxmind.geoip2.csv2sql.streaming.Event.WRITE;
 import static com.github.mbto.maxmind.geoip2.csv2sql.streaming.converters.LocationsConverter.geonameIdsWithEmptyCountryIsoCode;
 import static com.github.mbto.maxmind.geoip2.csv2sql.streaming.converters.LocationsConverter.ignoredGeonameIds;
-import static com.github.mbto.maxmind.geoip2.csv2sql.utils.ProjectUtils.*;
+import static com.github.mbto.maxmind.geoip2.csv2sql.utils.ProjectUtils.extractIPBlockFilename;
+import static com.github.mbto.maxmind.geoip2.csv2sql.utils.ProjectUtils.threadPrintln;
 import static com.github.mbto.maxmind.geoip2.csv2sql.utils.placeholder.ParseUtils.StringUtils.split2;
 
 /**
@@ -29,12 +29,14 @@ import static com.github.mbto.maxmind.geoip2.csv2sql.utils.placeholder.ParseUtil
  */
 public class IPBlockConverter extends AbstractConverter {
     private final String[] priorityGeonameIdGroupNames;
+    private final boolean logUndefinedAllGeonameIds;
 
     public IPBlockConverter(Registry registry, String dataType, int queueCapacity) {
-        super(registry, dataType, queueCapacity);
+        super(registry, dataType, queueCapacity,
+                Boolean.parseBoolean(registry.getFromExportSection("log_ignored_ipblocks", true)));
 
-        String priorityGeonameIdGroupNamesRaw = registry.getFromExportSection("ipblocks_priority_geonameId_groupNames", true);
-        if(!priorityGeonameIdGroupNamesRaw.isEmpty()) {
+        String priorityGeonameIdGroupNamesRaw = registry.getFromExportSection("ipblocks_priority_geonameId_groupNames", false);
+        if(priorityGeonameIdGroupNamesRaw != null && !priorityGeonameIdGroupNamesRaw.isEmpty()) {
             String[] priorityGeonameIdGroupNames = split2(priorityGeonameIdGroupNamesRaw, ',', true, true);
             if(priorityGeonameIdGroupNames.length != 0)
                 this.priorityGeonameIdGroupNames = priorityGeonameIdGroupNames;
@@ -42,6 +44,7 @@ public class IPBlockConverter extends AbstractConverter {
                 this.priorityGeonameIdGroupNames = null;
         } else
             this.priorityGeonameIdGroupNames = null;
+        this.logUndefinedAllGeonameIds = Boolean.parseBoolean(registry.getFromExportSection("log_undefined_all_geonameIds", true));
     }
 
     @Override
@@ -81,12 +84,25 @@ public class IPBlockConverter extends AbstractConverter {
                             ++geonameIdsCounter;
                     }
                     if(geonameIdsCounter == 0) {
-                        registry.incStats(sif.getDataType() /*== dataType*/ + "_ignored");
+                        if(logIgnored) {
+                            threadPrintln(System.out, "Ignored '" + dataType/*== sif.getDataType()*/ + "' in " + getConverterName() + " by filter from line '" + line + "'");
+                        }
+                        registry.incStats(dataType + " ignored");
                         continue;
                     }
                 }
                 IPBlock ipBlock = new IPBlock(csvHolder, parseCidrFunc);
-                ipBlock.setPriorityGeonameId(findPriorityGeonameId(csvHolder));
+                Integer priorityGeonameId;
+                try {
+                    priorityGeonameId = findPriorityGeonameId(csvHolder);
+                } catch (Throwable e) {
+                    if(logUndefinedAllGeonameIds) {
+                        threadPrintln(System.out, "Ignored '" + dataType + "' in " + getConverterName() + ", due " + e.getMessage() + " from line '" + line + "'");
+                    }
+                    registry.incStats(dataType + " ignored");
+                    continue;
+                }
+                ipBlock.setPriorityGeonameId(priorityGeonameId);
                 for (Map.Entry<String, String> entry : ipBlock.getValues().entrySet()) {
                     String value = entry.getValue();
                     if (value == null)
@@ -130,7 +146,6 @@ public class IPBlockConverter extends AbstractConverter {
         if(firstGeonameId != null)
             return firstGeonameId;
         throw new IllegalStateException("Failed to determine priority geoname_id by group names "
-                + Arrays.toString(priorityGeonameIdGroupNames)
-                + " from " + csvHolder.getValueByGroupName());
+                + Arrays.toString(priorityGeonameIdGroupNames));
     }
 }

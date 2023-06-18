@@ -1,5 +1,5 @@
 #### Features:
-* Downloads latest archive `GeoLite2-(Country|City)-CSV_%Date%.zip` using MaxMind API https://www.maxmind.com/ by [free license key](https://support.maxmind.com/account-faq/license-keys/how-do-i-generate-a-license-key/)
+* Downloads latest archive `GeoLite2-(Country|City)-CSV_%Date%.zip` using MaxMind API https://www.maxmind.com/ by [free license key](https://support.maxmind.com/hc/en-us/articles/4407111582235-Generate-a-License-Key)
 * Converts files `GeoLite2-(Country|City)-Locations-%LocaleCode%.csv, GeoLite2-(Country|City)-Blocks-(IPv4|IPv6).csv` to SQL DDL/DML
 * Builds archive `maxmind-geoip2-csv2sql.zip` with scripts splitted per N megabytes, using template engine
   (Example: If MySQL server `max_allowed_packet` parameter is too small - [64 MB by default](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_max_allowed_packet))

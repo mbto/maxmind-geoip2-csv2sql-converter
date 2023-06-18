@@ -1,7 +1,7 @@
 import org.gradle.api.JavaVersion.VERSION_11
 
 group = "com.github.mbto.maxmind-geoip2-csv2sql-converter"
-version = "1.0"
+version = "1.1"
 
 plugins {
     java
@@ -19,9 +19,6 @@ tasks {
         exclude("*.ini", "emoji.txt")
     }
     test {
-        if(!project.hasProperty("ManualTestEnabled")) {
-            exclude("**/ManualTest.class")
-        }
         maxParallelForks = Runtime.getRuntime().availableProcessors()
     }
 }
@@ -37,7 +34,10 @@ dependencies {
     testCompile("org.projectlombok:lombok:$lombokVer")
     testAnnotationProcessor("org.projectlombok:lombok:$lombokVer")
 
-    testCompile("junit:junit:4.13.2")
+    val jUnitVer = "5.9.3"
+    testCompile("org.junit.jupiter:junit-jupiter-engine:$jUnitVer")
+    testCompile("org.junit.jupiter:junit-jupiter-params:$jUnitVer")
+    testCompile("org.junit.vintage:junit-vintage-engine:$jUnitVer")
 }
 
 application {

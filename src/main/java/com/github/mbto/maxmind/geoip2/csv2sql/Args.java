@@ -2,8 +2,6 @@ package com.github.mbto.maxmind.geoip2.csv2sql;
 
 import com.beust.jcommander.DynamicParameter;
 import com.beust.jcommander.Parameter;
-import com.beust.jcommander.ParametersDelegate;
-import com.beust.jcommander.SubParameter;
 import com.github.mbto.maxmind.geoip2.csv2sql.utils.ProjectUtils;
 import com.github.mbto.maxmind.geoip2.csv2sql.utils.jcommander.IPVersionValidator;
 import com.github.mbto.maxmind.geoip2.csv2sql.utils.jcommander.LocaleConverter;
@@ -13,7 +11,10 @@ import lombok.Setter;
 import lombok.ToString;
 
 import java.nio.file.Path;
-import java.util.*;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import static com.github.mbto.maxmind.geoip2.csv2sql.utils.Constants.CONFIG_NAME_FORMAT;
@@ -38,7 +39,7 @@ public class Args {
     private String outputArchiveName = DEFAULT_ARCHIVE_NAME;
 
     @Parameter(names = "-k", order = 4,
-            description = "License key for MaxMind API. Free at https://support.maxmind.com/account-faq/license-keys/how-do-i-generate-a-license-key/")
+            description = "License key for MaxMind API. Free at https://support.maxmind.com/hc/en-us/articles/4407111582235-Generate-a-License-Key")
     private String licenseKey;
 
     @Parameter(names = "-c", order = 5, required = true,
@@ -63,10 +64,17 @@ public class Args {
 
     @DynamicParameter(names = "-LV", order = 8, description = "Filter values from location files by group name with regex:\n" +
             "      Example - for both GeoLite2-Country-CSV and GeoLite2-City-CSV editions:\n" +
-            "      -LVcontinent_code=EU,NA,OC -LVcountry_iso_code=AU,NZ,GB,IE,US,CA,CY\n" +
+            "      -LVgeoname_id=.*777.* -LVlocale_code=en,ru,de,es,fr\n" +
+            "      -LVcontinent_code=EU,NA,OC -LVcontinent_name=Europe|Africa,Asia\n" +
+            "      -LVcountry_iso_code=AU,NZ,GB,IE,US,CA,CY\n" +
             "      -LVcountry_name=Austr.*,Zealand$,^United,Ireland,Canada|Cyprus\n" +
+            "      -LVis_in_european_union=0|1\n" +
             "      At GeoLite2-City-CSV edition available filter by city_name and other group names:\n" +
-            "      -LVcity_name=Newport,^Clinton$|^Richmond$,\"Mandria, Paphos\",^Salem")
+            "      -LVsubdivision_1_iso_code=WO|JD|NU|GE|A.* -LVsubdivision_1_name=.*O.*\n" +
+            "      -LVsubdivision_2_iso_code=.* -LVsubdivision_2_name=.*A.*\n" +
+            "      -LVcity_name=Newport,^Clinton$|^Richmond$,\"Mandria, Paphos\",^Salem\n" +
+            "      -LVmetro_code=.* -LVtime_zone=.*/.*E.*"
+    )
     private Map<String, String> allowedLocationValuesRawByGroupName = new LinkedHashMap<>();
 
     @Parameter(names = "-mm", order = 9,

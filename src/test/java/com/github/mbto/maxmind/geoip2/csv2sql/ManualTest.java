@@ -9,14 +9,24 @@ import java.util.stream.IntStream;
 import static com.github.mbto.maxmind.geoip2.csv2sql.Constants.*;
 
 /**
- * For manual testing in IntelliJ: add -PManualTestEnabled in Gradle tab "Run Configuration" -> "Arguments"
+ * For manual testing in IntelliJ: add environment ManualTestEnabled=1
  * https://dev.mysql.com/doc/refman/8.0/en/integer-types.html
  * https://www.postgresql.org/docs/current/datatype-numeric.html
  * https://docs.microsoft.com/ru-ru/sql/t-sql/data-types/int-bigint-smallint-and-tinyint-transact-sql?view=sql-server-ver15
  */
 public class ManualTest {
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    private boolean canExecute() {
+        boolean canExecute = System.getenv("ManualTestEnabled") != null;
+        if(!canExecute) {
+            System.out.println("Skipped test, environment ManualTestEnabled=1 required");
+        }
+        return canExecute;
+    }
     @Test
     public void manualBuild1() throws Throwable {
+        if(!canExecute())
+            return;
         String editionId = "GeoLite2-Country-CSV";
 //        String editionId = "GeoLite2-City-CSV";
 
@@ -66,6 +76,8 @@ public class ManualTest {
 
     @Test
     public void manualBuild2() throws Throwable {
+        if(!canExecute())
+            return;
         String editionId = "GeoLite2-Country-CSV";
 //        String editionId = "GeoLite2-City-CSV";
         String[] argsRaw = {
@@ -99,13 +111,15 @@ public class ManualTest {
 
     @Test
     public void manualBuildWithMaxmindApi() throws Throwable {
+        if(!canExecute())
+            return;
 //        String editionId = "GeoLite2-City-CSV";
         String editionId = "GeoLite2-Country-CSV";
         String[] argsRaw = {
 //                "-s", integrationTestsDirPath.resolve(buildArchiveName("GeoLite2-Country-CSV")).toString(),
-                "-s", "R:\\test test\\maxmind-geoip2-csv2sql-converter-1.0\\bin\\converted\\GeoLite2-Country-CSV_20210629.zip",
+                "-s", "C:\\test test\\maxmind-geoip2-csv2sql-converter-1.1\\bin\\converted\\GeoLite2-Country-CSV_20230616.zip",
 //                "-od", buildIntegrationOutputDirPath(""),
-                "-od", "R:\\test test\\maxmind-geoip2-csv2sql-converter-1.0\\bin\\converted",
+                "-od", "C:\\test test\\maxmind-geoip2-csv2sql-converter-1.1\\bin\\converted",
                 "-oa", resultArchiveName,
 //                "-oa", "",
                 "-c", buildMySQLConfigName(editionId),
