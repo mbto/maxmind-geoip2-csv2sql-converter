@@ -8,7 +8,7 @@ import static java.util.Arrays.asList;
 public interface Constants {
     String SOFTWARE_NAME = "maxmind-geoip2-csv2sql-converter";
 
-    String SOFTWARE_INFO = "MaxMind GeoIP2 csv2sql Converter v1.0\nhttps://github.com/mbto/" + SOFTWARE_NAME;
+    String SOFTWARE_INFO = "MaxMind GeoIP2 csv2sql Converter v1.1\nhttps://github.com/mbto/" + SOFTWARE_NAME;
 
     Set<String> supportedLocales = new LinkedHashSet<>(
             asList("en", "ru", "de", "es", "fr", "ja", "pt-BR", "zh-CN"));

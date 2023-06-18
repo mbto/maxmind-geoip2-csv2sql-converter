@@ -5,7 +5,6 @@ import com.github.mbto.maxmind.geoip2.csv2sql.Registry;
 import com.github.mbto.maxmind.geoip2.csv2sql.utils.placeholder.Template;
 
 import java.io.PrintStream;
-import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -35,16 +34,16 @@ public abstract class ProjectUtils {
     public static Path resolveConfigDirectory() {
         String defaultURI = null;
         try {
-            defaultURI = URLDecoder.decode(ProjectUtils.class.getResource("").toString(), StandardCharsets.UTF_8); // R:\\test%20test\\ -> R:\\test test\\
+            defaultURI = URLDecoder.decode(ProjectUtils.class.getResource("").toString(), StandardCharsets.UTF_8); // C:\\test%20test\\ -> C:\\test test\\
 
             if (defaultURI.startsWith("file:/")) {
 // file:/C:/idea/maxmind-geoip2-csv2sql-converter/build/classes/java/main/com/github/mbto/maxmind/geoip2/csv2sql/utils/
                 return Paths.get("").resolve("src").resolve("main").resolve("resources").toAbsolutePath();
             } else {
-// jar:file:/C:/idea/maxmind-geoip2-csv2sql-converter/build/distributions/maxmind-geoip2-csv2sql-converter-1.0/lib/maxmind-geoip2-csv2sql-converter-1.0.jar!/com/github/mbto/maxmind/geoip2/csv2sql/utils/
+// jar:file:/C:/idea/maxmind-geoip2-csv2sql-converter/build/distributions/maxmind-geoip2-csv2sql-converter-1.1/lib/maxmind-geoip2-csv2sql-converter-1.1.jar!/com/github/mbto/maxmind/geoip2/csv2sql/utils/
                 String jarPrefix = "jar:file:/";
                 if (defaultURI.startsWith(jarPrefix)) {
-// C:/idea/maxmind-geoip2-csv2sql-converter/build/distributions/maxmind-geoip2-csv2sql-converter-1.0/lib/maxmind-geoip2-csv2sql-converter-1.0.jar
+// C:/idea/maxmind-geoip2-csv2sql-converter/build/distributions/maxmind-geoip2-csv2sql-converter-1.1/lib/maxmind-geoip2-csv2sql-converter-1.1.jar
                     String substring = defaultURI.substring(jarPrefix.length(), defaultURI.lastIndexOf('!'));
                     if(!substring.contains(":"))
                         substring = "/" + substring;

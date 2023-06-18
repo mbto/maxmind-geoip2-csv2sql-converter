@@ -14,19 +14,22 @@ import java.util.stream.Stream;
 import static com.github.mbto.maxmind.geoip2.csv2sql.utils.Constants.SOFTWARE_NAME;
 
 public interface Constants {
-    String archiveDate = "20210629";
+    String archiveDate = "20230616";
     String archiveExtension = ".zip";
     String resultArchiveName = "maxmind-geoip2-csv2sql-integration-test-result.zip";
     Path integrationTestsDirPath = buildintegrationTestsDirPath();
     Path resourceTestsDirPath = Paths.get("build", "resources", "test").toAbsolutePath();
 
     static Path buildintegrationTestsDirPath() {
-        Path expectedPath = Paths.get("R:\\IntegrationTests").resolve(SOFTWARE_NAME); // RAM disk
+        Path expectedPath = Paths.get("C:\\")
+                .resolve("test test")
+                .resolve("IntegrationTests")
+                .resolve(SOFTWARE_NAME);
         Path root = expectedPath;
         while (true) {
             Path parent = root.getParent();
             if(parent == null) {
-                return Files.isDirectory(root) ? expectedPath // R:\ exists ?
+                return Files.isDirectory(root) ? expectedPath // C:\ exists ?
                         : Paths.get(System.getProperty("java.io.tmpdir")).resolve(SOFTWARE_NAME);
             }
             root = parent;
@@ -102,13 +105,13 @@ public interface Constants {
             System.out.println(application.getRegistry().getStats()
                     .entrySet()
                     .stream()
-                    .map(entry -> "\t\t\t\"" + entry.getKey() + "\", " + entry.getValue())
+                    .map(entry -> "\t\t\tentry(\"" + entry.getKey() + "\", " + entry.getValue() + ")")
                     .collect(Collectors.joining(",\n",
-                            "\t\tMap.of(\n",
+                            "\t\tMap.ofEntries(\n",
                             "),\n\t\t\t\t\t\t" + actualArchiveFileSize + "},")));
         }
         if (delete) {
-            // Deleting testId direcroty from: R:\IntegrationTests\SOFTWARE_NAME\testId\resultArchiveName
+            // Deleting testId direcroty from: C:\test test\IntegrationTests\SOFTWARE_NAME\testId\resultArchiveName
             deleteRecursive(fullArchivePath.getParent());
         }
         Assert.assertNull(t);

@@ -1,7 +1,7 @@
 package com.github.mbto.maxmind.geoip2.csv2sql.streaming.converters;
 
-import com.github.mbto.maxmind.geoip2.csv2sql.Registry;
 import com.github.mbto.maxmind.geoip2.csv2sql.Args.Locale;
+import com.github.mbto.maxmind.geoip2.csv2sql.Registry;
 import com.github.mbto.maxmind.geoip2.csv2sql.streaming.BRWrapper;
 import com.github.mbto.maxmind.geoip2.csv2sql.streaming.Location;
 import com.github.mbto.maxmind.geoip2.csv2sql.streaming.Location.LocationData;
@@ -16,7 +16,8 @@ import java.util.concurrent.FutureTask;
 import java.util.regex.Pattern;
 
 import static com.github.mbto.maxmind.geoip2.csv2sql.streaming.Event.WRITE;
-import static com.github.mbto.maxmind.geoip2.csv2sql.utils.ProjectUtils.*;
+import static com.github.mbto.maxmind.geoip2.csv2sql.utils.ProjectUtils.extractLocationsFilenames;
+import static com.github.mbto.maxmind.geoip2.csv2sql.utils.ProjectUtils.threadPrintln;
 
 /**
  * 1 thread reads GeoLite2-(Country|City)-Locations-XXXX.csv files and fill messageQueue
@@ -24,9 +25,13 @@ import static com.github.mbto.maxmind.geoip2.csv2sql.utils.ProjectUtils.*;
 public class LocationsConverter extends AbstractConverter {
     public static final Set<Integer> geonameIdsWithEmptyCountryIsoCode = new HashSet<>();
     public static final Set<Integer> ignoredGeonameIds = new HashSet<>();
+    private final boolean logUndefinedAllSubdivisionsAndCityName;
 
     public LocationsConverter(Registry registry, int queueCapacity) {
-        super(registry, Location.class.getSimpleName().toLowerCase(), queueCapacity);
+        super(registry, Location.class.getSimpleName().toLowerCase(), queueCapacity,
+                Boolean.parseBoolean(registry.getFromExportSection("log_ignored_locations", true)));
+        this.logUndefinedAllSubdivisionsAndCityName = Boolean.parseBoolean(registry.getFromExportSection("log_undefined_all_subdivisions_and_city_name", true));
+
         // multiple gradle tests not clean static variables
         geonameIdsWithEmptyCountryIsoCode.clear();
         ignoredGeonameIds.clear();
@@ -56,6 +61,7 @@ public class LocationsConverter extends AbstractConverter {
             if (csvHolder == null) throw new IllegalStateException("Unable to define csvHolder, due empty locations_filenames template");
             Map<String, List<Pattern>> allowedLocationValuesByGroupName = registry.getAllowedLocationValuesByGroupName();
             boolean isCityEdition = csvHolder.getHeaders().contains("city_name");
+            String dataTypeLabel = !isCityEdition ? "country" : "city";
             Writer writer = new Writer(registry, dataType, messageQueue);
             writerT = new Thread(new FutureTask<>(writer));
             writerT.start();
@@ -84,7 +90,13 @@ public class LocationsConverter extends AbstractConverter {
                         })) {
                             int geoname_id = Integer.parseInt(location.getValues().get("geoname_id"));
                             ignoredGeonameIds.add(geoname_id);
-                            registry.incStats((!isCityEdition ? "country" : "city") + "_ignored");
+                            if(logIgnored) {
+                                threadPrintln(System.out, "Ignored '" + dataTypeLabel + "' in " + getConverterName()
+                                        + " by filter '" + filteredGroupName + "'"
+                                        + " only " + allowedLocationValuePatterns.toString()
+                                        + " from " + csvHolder.getValueByGroupName());
+                            }
+                            registry.incStats(dataTypeLabel + " ignored");
                             continue outer;
                         }
                     }
@@ -117,6 +129,8 @@ public class LocationsConverter extends AbstractConverter {
                 if (syntheticKey == null) { // geoname_id with 6255147 6255148 with empty country_iso_code
                     syntheticKey = locationValues.get("geoname_id");
                     geonameIdsWithEmptyCountryIsoCode.add(Integer.parseInt(syntheticKey));
+                    threadPrintln(System.out, "Informing: '" + sif.getDataType() + "' in " + getConverterName()
+                            + " without country_iso_code from " + csvHolder.getValueByGroupName());
                     registry.incStats(sif.getDataType() + " includes which unknown");
                 }
 
@@ -185,6 +199,10 @@ public class LocationsConverter extends AbstractConverter {
                                         }
                                         return false;
                                     }).count() == 5)) {
+                        if(logUndefinedAllSubdivisionsAndCityName) {
+                            threadPrintln(System.out, "Informing: '" + sif.getDataType() + "' in " + getConverterName()
+                                    + " without subdivision_* and city_name from " + csvHolder.getValueByGroupName());
+                        }
                         registry.incStats(sif.getDataType() + " includes which unknown");
                     }
                 }

@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static com.github.mbto.maxmind.geoip2.csv2sql.Constants.assertStats;
+import static java.util.Map.entry;
 import static org.junit.runners.Parameterized.Parameters;
 
 /**
@@ -33,100 +34,116 @@ public class CountryTest {
                 {new String[]{
                         "-i", "4",
                         "-mm", "32",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv4", 338608),
-                        8043371},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv4", 417044),
+                        entry("ipv4 ignored", 30)),
+                        9818745},
                 {new String[]{
                         "-i", "4",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv4", 338608),
-                        8042359},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv4", 417044),
+                        entry("ipv4 ignored", 30)),
+                        9818571},
                 {new String[]{
                         "-i", "4",
                         "-l", "en,ru",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv4", 338608),
-                        8032271},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv4", 417044),
+                        entry("ipv4 ignored", 30)),
+                        9808716},
                 {new String[]{
                         "-i", "4",
                         "-l", "en",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv4", 338608),
-                        8029644},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv4", 417044),
+                        entry("ipv4 ignored", 30)),
+                        9806066},
                 {new String[]{
                         "-i", "6",
                         "-mm", "32",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv6", 110835),
-                        5330598},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv6", 270936),
+                        entry("ipv6 ignored", 2)),
+                        11650773},
                 {new String[]{
                         "-i", "6",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv6", 110835),
-                        5330598},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv6", 270936),
+                        entry("ipv6 ignored", 2)),
+                        11649909},
                 {new String[]{
                         "-i", "6",
                         "-l", "en,ru",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv6", 110835),
-                        5320510},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv6", 270936),
+                        entry("ipv6 ignored", 2)),
+                        11640054},
                 {new String[]{
                         "-i", "6",
                         "-l", "en",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv6", 110835),
-                        5317883},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv6", 270936),
+                        entry("ipv6 ignored", 2)),
+                        11637404},
                 {new String[]{
                         "-i", "4,6",
                         "-mm", "32",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv4", 338608,
-                        "ipv6", 110835),
-                        13352349},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv4", 417044),
+                        entry("ipv4 ignored", 30),
+                        entry("ipv6", 270936),
+                        entry("ipv6 ignored", 2)),
+                        21448126},
                 {new String[]{
                         "-i", "4,6",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv4", 338608,
-                        "ipv6", 110835),
-                        13351337},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv4", 417044),
+                        entry("ipv4 ignored", 30),
+                        entry("ipv6", 270936),
+                        entry("ipv6 ignored", 2)),
+                        21447087},
                 {new String[]{
                         "-i", "4,6",
                         "-l", "en,ru",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv4", 338608,
-                        "ipv6", 110835),
-                        13341249},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv4", 417044),
+                        entry("ipv4 ignored", 30),
+                        entry("ipv6", 270936),
+                        entry("ipv6 ignored", 2)),
+                        21437232},
                 {new String[]{
                         "-i", "4,6",
                         "-l", "en",
-                }, Map.of(
-                        "country", 252,
-                        "country includes which unknown", 2,
-                        "ipv4", 338608,
-                        "ipv6", 110835),
-                        13338622},
+                }, Map.ofEntries(
+                        entry("country", 252),
+                        entry("country includes which unknown", 2),
+                        entry("ipv4", 417044),
+                        entry("ipv4 ignored", 30),
+                        entry("ipv6", 270936),
+                        entry("ipv6 ignored", 2)),
+                        21434582},
         });
     }
 
