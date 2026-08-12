@@ -1,0 +1,36 @@
+MySQL cleanup:
+
+DROP DATABASE IF EXISTS `maxmind_anonymous_ip`;
+DROP DATABASE IF EXISTS `maxmind_anonymous_plus`;
+DROP DATABASE IF EXISTS `maxmind_asn`;
+DROP DATABASE IF EXISTS `maxmind_connection_type`;
+DROP DATABASE IF EXISTS `maxmind_domain`;
+DROP DATABASE IF EXISTS `maxmind_enterprise`;
+DROP DATABASE IF EXISTS `maxmind_geoip2_city`;
+DROP DATABASE IF EXISTS `maxmind_geoip2_country`;
+DROP DATABASE IF EXISTS `maxmind_geolite2_city`;
+DROP DATABASE IF EXISTS `maxmind_geolite2_country`;
+DROP DATABASE IF EXISTS `maxmind_ip_risk`;
+DROP DATABASE IF EXISTS `maxmind_isp`;
+DROP DATABASE IF EXISTS `maxmind_residential_proxy`;
+DROP DATABASE IF EXISTS `maxmind_static_ip_score`;
+DROP DATABASE IF EXISTS `maxmind_user_count`;
+
+PostgreSQL cleanup:
+
+-- The PostgreSQL loader creates schemas inside postgresql_database.
+DROP SCHEMA IF EXISTS "maxmind_anonymous_ip" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_anonymous_plus" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_asn" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_connection_type" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_domain" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_enterprise" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_geoip2_city" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_geoip2_country" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_geolite2_city" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_geolite2_country" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_ip_risk" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_isp" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_residential_proxy" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_static_ip_score" CASCADE;
+DROP SCHEMA IF EXISTS "maxmind_user_count" CASCADE;
