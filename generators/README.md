@@ -6,8 +6,14 @@ Project-specific output schemas are normally configured in the main INI with
 SQL behavior.
 
 The main converter script sources exactly one `functions.bash` file. With
-`convert.sql_bash_generator_file = functions.bash`, lookup is relative to the config
-directory first:
+`convert.sql_bash_generator_file = functions.bash`, the first lookup is:
+
+```text
+../generators/<project_name>/functions.bash
+```
+
+resolved relative to the config directory. For configs under `configs/`, this is
+the repository-root path:
 
 ```text
 generators/<project_name>/functions.bash
@@ -20,7 +26,8 @@ generators/default/functions.bash
 ```
 
 For an explicit custom generator, set `sql_bash_generator_file` to a relative or
-absolute path to a `functions.bash` file.
+absolute path to a `functions.bash` file. Relative paths are resolved from the
+config directory.
 
 A project functions file is regular Bash and must define these functions:
 
@@ -52,7 +59,7 @@ Meaning of the most commonly used values:
 * `RUN_DIR` - generated package directory for the current project/dbms run, such as `converted/test.mysql`.
 * `CSV_DIR` - archive-specific extracted CSV/TSV directory: `RUN_DIR/csv/ARCHIVE_ROOT`.
 * `DBMS` - selected database type: `mysql` or `postgresql`.
-* `SCHEMA_NAME` - target schema/database name from `[database].schema_name` or the selected edition-scoped override.
+* `SCHEMA_NAME` - target MySQL database name or PostgreSQL schema name from `[database].schema_name` or the selected edition-scoped override.
 * `ARCHIVE_ROOT` - root directory name found inside the ZIP, such as `GeoIP2-City-CSV_Example`.
 * `ARCHIVE_EDITION_ID` - edition id found in the ZIP root, such as `GeoIP2-City-CSV`.
 * `ARCHIVE_EDITION_KIND` - MaxMind edition kind from the archive, such as `City`, `Country`, `Enterprise`, `Domain`, or `ASN`.

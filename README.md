@@ -65,7 +65,8 @@ Config lookup first checks an edition-scoped section such as
 `[download]`. Package-level execution, output, cleanup, archive, and client
 settings live in `[settings]` because one config generates one output package
 and one `loader.sh`; the database type comes from the config filename suffix,
-such as `.mysql.ini` or `.postgresql.ini`.
+such as `.mysql.ini` or `.postgresql.ini`. `[settings]` keys are read only from
+that exact section, not from edition-scoped sections.
 Single-edition configs can still use plain `[download]`, `[database]`,
 `[convert]`, and `[columns.<table>]` sections.
 
@@ -99,6 +100,31 @@ auto_delete_csvs = false
 on_debug = false
 ```
 
+Example PostgreSQL package settings:
+
+```ini
+[settings]
+# PostgreSQL client command; values: command name from PATH or path to executable.
+postgresql_command = psql
+# PostgreSQL host; values: IP address, DNS name, or localhost.
+postgresql_host = 127.0.0.1
+# PostgreSQL port; values: integer, usually 5432.
+postgresql_port = 5432
+# PostgreSQL user; values: user name.
+postgresql_user = postgres
+# PostgreSQL database used for the connection; values: existing database name.
+postgresql_database = maxmind
+# PostgreSQL password; values: string or empty for passwordless/.pgpass authentication.
+postgresql_password = postgres
+# Additional psql arguments; values: CLI argument string or empty.
+postgresql_extra_args =
+```
+
+`postgresql_database` is the existing database passed to `psql --dbname`.
+Generated SQL creates schemas inside that database; it does not run
+`CREATE DATABASE` or switch databases. Per-edition `schema_name` controls the
+target MySQL database name or PostgreSQL schema name for generated tables.
+
 For one-off debug timing without editing the config, set `ON_DEBUG=true` in the
 environment before running the converter. Debug timing prints each measured step and
 its elapsed time to stderr.
@@ -118,9 +144,11 @@ locales = en
 v_geoname_id_priority_columns = geoname_id,registered_country_geoname_id,represented_country_geoname_id
 ```
 
-With the default `functions.bash` value, the converter looks for
-`generators/<project_name>/functions.bash` relative to the config directory and
-then falls back to `generators/default/functions.bash`.
+With the default `functions.bash` value, the converter first resolves
+`../generators/<project_name>/functions.bash` relative to the config directory.
+For configs under `configs/`, that maps to `generators/<project_name>/functions.bash`
+in the repository root. If it is missing, the converter falls back to the bundled
+`generators/default/functions.bash`.
 
 Each processed MaxMind edition is validated against the root directory inside
 the ZIP, for example `GeoIP2-Domain-CSV_Example/` or `GeoLite2-City-CSV_20260605/`.
@@ -218,20 +246,22 @@ foreign-key names.
 
 ## Output Shape
 
-Location databases create normalized location tables plus IP block tables.
-City and Enterprise configs create `timezone`, `country`, `subdivision1`,
-`subdivision2`, `city`, `ipv4`, and `ipv6`. Enterprise also creates `isp` and
-adds foreign keys from `ipv4/ipv6.isp_id` to `isp.isp_id`.
+Location databases create normalized location tables plus IP block tables for
+the enabled IP versions. City and Enterprise configs create `timezone`,
+`country`, `subdivision1`, `subdivision2`, `city`, and `ipv4` and/or `ipv6`.
+Enterprise also creates `isp` and adds foreign keys from enabled
+`ipv4/ipv6.isp_id` columns to `isp.isp_id`.
 
-Country configs create `country`, `ipv4`, and `ipv6`.
+Country configs create `country` plus `ipv4` and/or `ipv6`.
 
-Network-only databases create only `ipv4` and `ipv6`. The `network` column is
-the natural primary key; generated `start_ip`/`last_ip` columns support range
-lookup/indexing. In MySQL these range columns are numeric values, while in
-PostgreSQL they are `inet` values. PostgreSQL `inet` always has a prefix length;
-generated range boundaries use host prefixes (`/32` for IPv4 and `/128` for
-IPv6), not the source network prefix. These datasets do not have synthetic
-foreign keys because MaxMind provides no separate stable key beyond `network`.
+Network-only databases create only `ipv4` and/or `ipv6` for the enabled IP
+versions. The `network` column is the natural primary key; generated
+`start_ip`/`last_ip` columns support range lookup/indexing. In MySQL these range
+columns are numeric values, while in PostgreSQL they are `inet` values.
+PostgreSQL `inet` always has a prefix length; generated range boundaries use
+host prefixes (`/32` for IPv4 and `/128` for IPv6), not the source network
+prefix. These datasets do not have synthetic foreign keys because MaxMind
+provides no separate stable key beyond `network`.
 
 ## Output Columns
 
