@@ -44,8 +44,27 @@ write_loader
 make_output_archive
 ```
 
+`write_load_data` owns the execution order; the numeric file names alone do not
+define it. The default generator emits these orders:
+
+```text
+MySQL:
+00_create_raw -> 10_load_raw -> 20_transform_stage -> 90_indexes_stage
+-> 100_cleanup_raw -> 98_promote -> 99_routines
+
+PostgreSQL (inside one BEGIN/COMMIT):
+00_create_raw -> 10_load_raw -> 20_transform_stage -> 90_indexes_stage
+-> 98_promote -> 99_routines -> 100_cleanup_raw
+```
+
+Custom generators should preserve the staging/promote contract or provide an
+equivalent atomicity model. `write_loader` should ultimately execute the
+generated `load_data.sql` (or its runtime-rewritten copy); it should not define
+a second, potentially different SQL order.
+
 The sourced generator can use variables and helper functions from
 `maxmind-csv2sql-converter.sh`, including `RUN_DIR`, `CSV_DIR`, `DBMS`,
+`BUILD_RUN_ID`, `CONVERTER_VERSION`, `SCHEMA_VERSION`,
 `SCHEMA_NAME`, `ARCHIVE_ROOT`, `ARCHIVE_EDITION_ID`, `ARCHIVE_EDITION_KIND`,
 `ARCHIVE_LOCATION_KIND`, `ARCHIVE_FAMILY`, `ARCHIVE_BUILD_DATE`, `CSV_PREFIX`,
 `SELECTED_LOCALES`, `LOAD_LOCALES`, `IP_VERSIONS`, `PRIORITY_FIELDS`, `ident`,
@@ -59,6 +78,9 @@ Meaning of the most commonly used values:
 * `RUN_DIR` - generated package directory for the current project/dbms run, such as `converted/test.mysql`.
 * `CSV_DIR` - archive-specific extracted CSV/TSV directory: `RUN_DIR/csv/ARCHIVE_ROOT`.
 * `DBMS` - selected database type: `mysql` or `postgresql`.
+* `BUILD_RUN_ID` - one build identifier shared by editions processed by the current config invocation.
+* `CONVERTER_VERSION` - converter release version embedded in generated metadata.
+* `SCHEMA_VERSION` - integer generated-schema contract version.
 * `SCHEMA_NAME` - target MySQL database name or PostgreSQL schema name from `[database].schema_name` or the selected edition-scoped override.
 * `ARCHIVE_ROOT` - root directory name found inside the ZIP, such as `GeoIP2-City-CSV_Example`.
 * `ARCHIVE_EDITION_ID` - edition id found in the ZIP root, such as `GeoIP2-City-CSV`.
@@ -70,7 +92,7 @@ Meaning of the most commonly used values:
 * `SELECTED_LOCALES` - locales requested by `[convert].locales`.
 * `LOAD_LOCALES` - locales actually extracted for raw loading. It includes `en` even when `en` was not requested, because transforms use English rows as the base.
 * `IP_VERSIONS` - IP block versions requested by `[convert].ip_versions`.
-* `PRIORITY_FIELDS` - geoname id source columns requested by `[convert].v_geoname_id_priority_columns`.
+* `PRIORITY_FIELDS` - geoname id source columns requested by `[convert].e_geoname_id_priority_columns`.
 * `ident` - quote an SQL identifier for the selected `DBMS`.
 * `mysql_ident` - quote an SQL identifier using MySQL backtick rules.
 * `pg_ident` - quote an SQL identifier using PostgreSQL double-quote rules.

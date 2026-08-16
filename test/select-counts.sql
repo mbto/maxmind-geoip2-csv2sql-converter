@@ -93,3 +93,33 @@ UNION ALL
 SELECT 'maxmind_user_count.ipv4' AS table_name, COUNT(*) AS row_count FROM maxmind_user_count.ipv4
 UNION ALL
 SELECT 'maxmind_user_count.ipv6' AS table_name, COUNT(*) AS row_count FROM maxmind_user_count.ipv6;
+
+SELECT 'maxmind_anonymous_ip.dataset_metadata' AS table_name, COUNT(*) AS row_count FROM maxmind_anonymous_ip.dataset_metadata
+UNION ALL
+SELECT 'maxmind_anonymous_plus.dataset_metadata', COUNT(*) FROM maxmind_anonymous_plus.dataset_metadata
+UNION ALL
+SELECT 'maxmind_asn.dataset_metadata', COUNT(*) FROM maxmind_asn.dataset_metadata
+UNION ALL
+SELECT 'maxmind_geoip2_city.dataset_metadata', COUNT(*) FROM maxmind_geoip2_city.dataset_metadata
+UNION ALL
+SELECT 'maxmind_geolite2_city.dataset_metadata', COUNT(*) FROM maxmind_geolite2_city.dataset_metadata
+UNION ALL
+SELECT 'maxmind_connection_type.dataset_metadata', COUNT(*) FROM maxmind_connection_type.dataset_metadata
+UNION ALL
+SELECT 'maxmind_geoip2_country.dataset_metadata', COUNT(*) FROM maxmind_geoip2_country.dataset_metadata
+UNION ALL
+SELECT 'maxmind_geolite2_country.dataset_metadata', COUNT(*) FROM maxmind_geolite2_country.dataset_metadata
+UNION ALL
+SELECT 'maxmind_domain.dataset_metadata', COUNT(*) FROM maxmind_domain.dataset_metadata
+UNION ALL
+SELECT 'maxmind_enterprise.dataset_metadata', COUNT(*) FROM maxmind_enterprise.dataset_metadata
+UNION ALL
+SELECT 'maxmind_ip_risk.dataset_metadata', COUNT(*) FROM maxmind_ip_risk.dataset_metadata
+UNION ALL
+SELECT 'maxmind_isp.dataset_metadata', COUNT(*) FROM maxmind_isp.dataset_metadata
+UNION ALL
+SELECT 'maxmind_residential_proxy.dataset_metadata', COUNT(*) FROM maxmind_residential_proxy.dataset_metadata
+UNION ALL
+SELECT 'maxmind_static_ip_score.dataset_metadata', COUNT(*) FROM maxmind_static_ip_score.dataset_metadata
+UNION ALL
+SELECT 'maxmind_user_count.dataset_metadata', COUNT(*) FROM maxmind_user_count.dataset_metadata;

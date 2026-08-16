@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly CONVERTER_VERSION="1.3"
+readonly SCHEMA_VERSION=4
+export CONVERTER_VERSION SCHEMA_VERSION
+
 usage() {
-  cat <<'USAGE'
-https://github.com/mbto/maxmind-csv2sql-converter v1.2
+  cat <<USAGE
+https://github.com/mbto/maxmind-csv2sql-converter v$CONVERTER_VERSION
 
 Usage:
   maxmind-csv2sql-converter.sh -c path/to/config.ini
@@ -1012,7 +1016,7 @@ download_archive() {
 }
 
 if [[ "$LIST_EDITIONS" == "true" ]]; then
-  info "https://github.com/mbto/maxmind-csv2sql-converter v1.2"
+  info "https://github.com/mbto/maxmind-csv2sql-converter v$CONVERTER_VERSION"
   list_config_editions
   exit 0
 fi
@@ -1021,8 +1025,9 @@ CONFIG_EDITIONS=()
 mapfile -t CONFIG_EDITIONS < <(list_config_editions)
 
 if [[ -z "${MAXMIND_CSV2SQL_SELECTED_EDITION:-}" && "${#CONFIG_EDITIONS[@]}" -gt 0 ]]; then
-  info "https://github.com/mbto/maxmind-csv2sql-converter v1.2"
+  info "https://github.com/mbto/maxmind-csv2sql-converter v$CONVERTER_VERSION"
   debug_log "debug enabled"
+  BUILD_RUN_ID="${MAXMIND_CSV2SQL_BUILD_RUN_ID:-b$(date -u +%Y%m%dT%H%M%SZ)_$$}"
   for edition in "${CONFIG_EDITIONS[@]}"; do
     [[ "$edition" =~ ^(GeoIP2|GeoLite2|GeoIP)-[A-Za-z0-9-]+-CSV$ ]] || die "Unsupported edition in editions.edition_ids: $edition"
   done
@@ -1039,6 +1044,7 @@ if [[ -z "${MAXMIND_CSV2SQL_SELECTED_EDITION:-}" && "${#CONFIG_EDITIONS[@]}" -gt
         MAXMIND_CSV2SQL_RESET_OUTPUT=true \
         MAXMIND_CSV2SQL_APPEND_OUTPUT=false \
         MAXMIND_CSV2SQL_FINAL_OUTPUT="$final" \
+        MAXMIND_CSV2SQL_BUILD_RUN_ID="$BUILD_RUN_ID" \
         bash "$SCRIPT_PATH" -c "$CONFIG_PATH"
     else
       debug_step "convert $edition" env \
@@ -1046,6 +1052,7 @@ if [[ -z "${MAXMIND_CSV2SQL_SELECTED_EDITION:-}" && "${#CONFIG_EDITIONS[@]}" -gt
         MAXMIND_CSV2SQL_RESET_OUTPUT=false \
         MAXMIND_CSV2SQL_APPEND_OUTPUT=true \
         MAXMIND_CSV2SQL_FINAL_OUTPUT="$final" \
+        MAXMIND_CSV2SQL_BUILD_RUN_ID="$BUILD_RUN_ID" \
         bash "$SCRIPT_PATH" -c "$CONFIG_PATH"
     fi
   done
@@ -1118,7 +1125,7 @@ OUTPUT_DIR_RAW="$(cfg_get_setting output_dir "../converted")"
 OUTPUT_ARCHIVE_NAME="$(cfg_get_setting output_archive_name "")"
 IP_VERSIONS_RAW="$(cfg_get convert ip_versions "4,6")"
 LOCALES_RAW="$(cfg_get convert locales "en,ru,de,es,fr,ja,pt-BR,zh-CN")"
-PRIORITY_FIELDS_RAW="$(cfg_get convert v_geoname_id_priority_columns "geoname_id,registered_country_geoname_id,represented_country_geoname_id")"
+PRIORITY_FIELDS_RAW="$(cfg_get convert e_geoname_id_priority_columns "geoname_id,registered_country_geoname_id,represented_country_geoname_id")"
 AUTO_DELETE_CSVS="$(bool_value "$(cfg_get_setting auto_delete_csvs "false")" false)"
 SQL_BASH_GENERATOR_FILE_RAW="$(cfg_get convert sql_bash_generator_file "functions.bash")"
 
@@ -1128,7 +1135,7 @@ if [[ "$SOURCE_ARCHIVE_URI" == *"\${license_key}"* && -z "$LICENSE_KEY" ]]; then
 fi
 validate_csv_values "$IP_VERSIONS_RAW" "4,6" "convert.ip_versions"
 validate_csv_values "$LOCALES_RAW" "en,ru,de,es,fr,ja,pt-BR,zh-CN" "convert.locales"
-validate_csv_values "$PRIORITY_FIELDS_RAW" "geoname_id,registered_country_geoname_id,represented_country_geoname_id" "convert.v_geoname_id_priority_columns"
+validate_csv_values "$PRIORITY_FIELDS_RAW" "geoname_id,registered_country_geoname_id,represented_country_geoname_id" "convert.e_geoname_id_priority_columns"
 
 SOURCE_ARCHIVE_URI="${SOURCE_ARCHIVE_URI//\$\{edition_id\}/$CONFIG_EDITION_ID}"
 SOURCE_ARCHIVE_URI="${SOURCE_ARCHIVE_URI//\$\{license_key\}/$LICENSE_KEY}"
@@ -1207,6 +1214,8 @@ if [[ -z "$SCHEMA_NAME" ]]; then
 fi
 
 RUN_ID="l$(date +%y%m%d%H%M%S)_$$"
+BUILD_RUN_ID="${MAXMIND_CSV2SQL_BUILD_RUN_ID:-b$(date -u +%Y%m%dT%H%M%SZ)_$$}"
+export BUILD_RUN_ID
 RUN_DIR="$OUTPUT_DIR/$CONFIG_PROJECT_NAME.$DBMS"
 case "$RUN_DIR" in
   "$OUTPUT_DIR"/*) ;;

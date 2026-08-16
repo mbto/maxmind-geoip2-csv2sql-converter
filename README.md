@@ -3,7 +3,7 @@
 Single Bash entrypoint for generating MySQL 8 or PostgreSQL import packages from
 MaxMind GeoIP/GeoIP2/GeoLite2 CSV ZIP archives.
 
-Current release config format: `v1.2`.
+Current release config format: `v1.3`
 
 Supported config set includes:
 
@@ -61,7 +61,7 @@ converts every uncommented edition from `[editions].edition_ids`;
 `--list-editions` prints the effective list.
 
 Config lookup first checks an edition-scoped section such as
-`[GeoIP2-Domain-CSV.download]`, then falls back to an unscoped section such as
+`[GeoLite2-Country-CSV.download]`, then falls back to an unscoped section such as
 `[download]`. Package-level execution, output, cleanup, archive, and client
 settings live in `[settings]` because one config generates one output package
 and one `loader.sh`; the database type comes from the config filename suffix,
@@ -76,6 +76,7 @@ Example MySQL package settings:
 [settings]
 # MySQL client command; values: command name from PATH or path to executable.
 mysql_command = mysql
+# mysql_command = C:/Program Files/MySQL/MySQL Server 8.0/bin/mysql.exe
 # MySQL host; values: IP address, DNS name, or localhost.
 mysql_host = 127.0.0.1
 # MySQL port; values: integer, usually 3306.
@@ -106,6 +107,7 @@ Example PostgreSQL package settings:
 [settings]
 # PostgreSQL client command; values: command name from PATH or path to executable.
 postgresql_command = psql
+# postgresql_command = C:/Program Files/PostgreSQL/16/bin/psql.exe
 # PostgreSQL host; values: IP address, DNS name, or localhost.
 postgresql_host = 127.0.0.1
 # PostgreSQL port; values: integer, usually 5432.
@@ -118,6 +120,16 @@ postgresql_database = maxmind
 postgresql_password = postgres
 # Additional psql arguments; values: CLI argument string or empty.
 postgresql_extra_args =
+# Base output directory; values: relative or absolute path.
+output_dir = ../converted
+# Generated result ZIP name; values: filename with or without .zip, or empty to skip archive creation.
+output_archive_name =
+# Execute the generated SQL after preparing files; values: true or false.
+auto_execute_loader_sh = false
+# Delete extracted CSV/TSV files after successful auto_execute_loader_sh=true run; values: true or false.
+auto_delete_csvs = false
+# Print converter debug timings; values: true or false.
+on_debug = false
 ```
 
 `postgresql_database` is the existing database passed to `psql --dbname`.
@@ -133,15 +145,15 @@ Edition-level conversion settings, including custom SQL generator selection,
 belong in `[<edition>.convert]`:
 
 ```ini
-[GeoIP2-Domain-CSV.convert]
+[GeoLite2-Country-CSV.convert]
 # SQL Bash generator file; values: functions.bash or relative/absolute path to a custom functions.bash.
 sql_bash_generator_file = functions.bash
 # IP block versions to import; values: 4, 6, or comma-separated list 4,6.
 ip_versions = 4,6
 # Locations CSV locales to import; values: en, ru, de, es, fr, ja, pt-BR, zh-CN, comma-separated.
-locales = en
-# Blocks CSV columns used, in priority order, to derive v_geoname_id; values: geoname_id, registered_country_geoname_id, represented_country_geoname_id.
-v_geoname_id_priority_columns = geoname_id,registered_country_geoname_id,represented_country_geoname_id
+locales = en,ru,de,es,fr,ja,pt-BR,zh-CN
+# Blocks CSV columns used, in priority order, to derive e_geoname_id; values: geoname_id, registered_country_geoname_id, represented_country_geoname_id.
+e_geoname_id_priority_columns = geoname_id,registered_country_geoname_id,represented_country_geoname_id
 ```
 
 With the default `functions.bash` value, the converter first resolves
@@ -151,7 +163,7 @@ in the repository root. If it is missing, the converter falls back to the bundle
 `generators/default/functions.bash`.
 
 Each processed MaxMind edition is validated against the root directory inside
-the ZIP, for example `GeoIP2-Domain-CSV_Example/` or `GeoLite2-City-CSV_20260605/`.
+the ZIP, for example `GeoLite2-Country-CSV_Example/` or `GeoLite2-City-CSV_20260605/`.
 
 ## Download Sources
 
@@ -178,13 +190,26 @@ edition_ids =
   GeoIP2-Static-IP-Score-CSV
   GeoIP2-User-Count-CSV
 
-[GeoIP2-Domain-CSV.download]
+[GeoLite2-Country-CSV.download]
 # MaxMind edition expected by this section; values: one edition_id from [editions].
-edition_id = GeoIP2-Domain-CSV
+edition_id = GeoLite2-Country-CSV
 # MaxMind license key for official downloads; values: a string, or empty for local archives and URLs without ${license_key}.
-license_key = your-maxmind-license-key
+license_key = M8jFjv3vZWrOCaZN
 # MaxMind ZIP archive source; values: HTTP(S) URL or local path; supports ${edition_id}, ${license_key}, ${database_type}, and ${project_name}.
 source_archive_uri = https://download.maxmind.com/app/geoip_download?edition_id=${edition_id}&license_key=${license_key}&suffix=zip
+# Mirror examples:
+# source_archive_uri = https://some.maxmind.csv.repository/${edition_id}.zip
+# source_archive_uri = ../test/data/GeoLite2-Country-CSV_20260605.zip
+# Try a direct download before proxy attempts; values: true or false.
+try_without_proxy = true
+# curl connection timeout in seconds; values: integer greater than 0.
+connect_timeout_seconds = 5
+# Maximum time for one curl download attempt in seconds; values: integer greater than 0.
+max_time_seconds = 1800
+# Number of curl retry attempts; values: integer 0 or greater.
+retries = 2
+# Proxy list file; values: relative/absolute path or empty when proxies are not needed.
+proxy_file = proxy.txt
 ...
 ```
 
@@ -193,8 +218,8 @@ Mirror and local archive examples:
 ```ini
 # Mirror examples:
 # source_archive_uri = https://some.maxmind.csv.repository/${edition_id}.zip
-# source_archive_uri = ../test/data/GeoIP2-Domain-CSV_Example.zip
-# source_archive_uri = C:\data\GeoIP2-Domain-CSV_20260605.zip
+# source_archive_uri = ../test/data/GeoLite2-Country-CSV_Example.zip
+# source_archive_uri = C:\data\GeoLite2-Country-CSV_20260605.zip
 ```
 
 Template variables available in `source_archive_uri`: `${edition_id}`, `${license_key}`, `${database_type}`, and `${project_name}`.
@@ -216,7 +241,7 @@ For `default.mysql.ini` this is `converted/default.mysql/`; for
 editions are enabled, generated SQL files are accumulated in that one
 project/database directory. Extracted CSV/TSV files are stored per archive root under
 `converted/<project_name>.<database_type>/csv/`, for example
-`converted/default.mysql/csv/GeoIP2-Connection-Type-CSV_Example/`, to avoid
+`converted/default.mysql/csv/GeoLite2-Country-CSV_Example/`, to avoid
 filename collisions between editions and between MySQL/PostgreSQL runs.
 
 Important generated files:
@@ -226,6 +251,11 @@ Important generated files:
   `100_cleanup_raw.sql`.
 * `load_data.sql` - full import script.
 * `loader.sh` - runs `load_data.sql` with `mysql` or `psql`.
+
+The actual include order is defined by `load_data.sql`. MySQL runs cleanup
+before promotion and then creates routines; PostgreSQL promotes, creates
+routines, and cleans raw tables inside its single transaction. See
+`generators/readme.md` when implementing a custom SQL Bash generator.
 
 With `settings.auto_execute_loader_sh = false`, the package is generated but not
 run. With `settings.auto_execute_loader_sh = true`, `loader.sh` is executed
@@ -246,13 +276,22 @@ foreign-key names.
 
 ## Output Shape
 
-Location databases create normalized location tables plus IP block tables for
-the enabled IP versions. City and Enterprise configs create `timezone`,
+Every database creates `dataset_metadata` plus IP block tables for the enabled
+IP versions. Location databases additionally create normalized location
+tables. City and Enterprise configs create `timezone`,
 `country`, `subdivision1`, `subdivision2`, `city`, and `ipv4` and/or `ipv6`.
 Enterprise also creates `isp` and adds foreign keys from enabled
 `ipv4/ipv6.isp_id` columns to `isp.isp_id`.
 
 Country configs create `country` plus `ipv4` and/or `ipv6`.
+
+Foreign keys from a network to its four Location references use
+`ON UPDATE RESTRICT ON DELETE RESTRICT`. A Location row is shared lookup data:
+deleting a represented- or registered-country row must not silently delete the
+whole network row through `CASCADE`. The normalized City hierarchy keeps
+`CASCADE`, where deleting a parent dimension intentionally removes its child
+dimension rows. Normal imports replace staged tables atomically and do not
+depend on either action.
 
 Network-only databases create only `ipv4` and/or `ipv6` for the enabled IP
 versions. The `network` column is the natural primary key; generated
@@ -272,8 +311,9 @@ Project configs can choose output columns via `[columns.<table>]` or
 
 Some columns are required by the default generator:
 
-* all datasets: IP `network` and range columns
-* location datasets: primary keys and `v_geoname_id`
+* all datasets: metadata fields plus IP `network` and range columns
+* location datasets: primary keys, `e_geoname_id`, and
+  `e_geoname_source_code`; the three source GeoName ID columns are optional
 * Enterprise: `isp.isp_id` when the `isp` table is enabled
 
 Required columns are intentionally omitted from the bundled configs; missing
@@ -322,654 +362,778 @@ Example:
 # country_iso_code = AU,NZ,GB,IE,US,CA,CY
 # Filter by country_name; values: regex or comma-separated regex list.
 # country_name = Austr.*,Zealand$,^United,Ireland,Canada|Cyprus
-...
+# Filter by is_in_european_union; values: regex, usually 0 or 1.
+# is_in_european_union = 0|1
+# Filter by subdivision_1_iso_code; values: regex or comma-separated regex list.
+# subdivision_1_iso_code = WO|JD|NU|GE|A.*
+# Filter by subdivision_1_name; values: regex or comma-separated regex list.
+# subdivision_1_name = .*O.*
+# Filter by subdivision_2_iso_code; values: regex or comma-separated regex list.
+# subdivision_2_iso_code = .*
+# Filter by subdivision_2_name; values: regex or comma-separated regex list.
+# subdivision_2_name = .*A.*
+# Filter by city_name; values: regex or comma-separated regex list; quote values that contain commas.
+# city_name = Newport,^Clinton$|^Richmond$,"Mandria, Paphos",^Salem
+# Filter by metro_code; values: regex or comma-separated regex list.
+# metro_code = .*
+# Filter by time_zone; values: regex or comma-separated regex list.
+# time_zone = .*/.*E.*
 ```
 
 ## Lookup Helpers
 
-Location databases generate:
+The default generator exposes the same logical API in MySQL and PostgreSQL.
+MySQL table-valued entry points are procedures called with `CALL`; PostgreSQL
+entry points are functions queried with `SELECT * FROM`. Scalar helpers are
+functions in both databases.
 
-* `find_network_by_ip(ip)` - one IP address; MySQL `VARCHAR(45)`, PostgreSQL `text`.
-* `find_geoname_id_by_ip(ip)` - one IP address; MySQL `VARCHAR(45)`, PostgreSQL `text`.
-* `find_geoinfo_by_ip(ip)` - one IP address; MySQL `VARCHAR(45)`, PostgreSQL `text`.
-* `build_location_mix(geoname_id, append_emoji)` - one geoname id and emoji flag; MySQL `INT UNSIGNED, INT UNSIGNED`, PostgreSQL `integer, integer`.
-* `build_location_mix_with_iso_code(geoname_id)` - one geoname id; MySQL `INT UNSIGNED`, PostgreSQL `integer`.
-* `find_networks_by_ips_json(ips_json)` - JSON array of IP strings; MySQL `JSON`, PostgreSQL `jsonb`.
-* `find_geoname_ids_by_ips_json(ips_json)` - JSON array of IP strings; MySQL `JSON`, PostgreSQL `jsonb`.
-* `find_geoinfo_by_ips_json(ips_json)` - JSON array of IP strings; MySQL `JSON`, PostgreSQL `jsonb`.
-* `find_geoinfo_by_geoname_ids_json(geoname_ids_json)` - JSON array of geoname ids; MySQL `JSON`, PostgreSQL `jsonb`.
-* `build_location_mixes_by_geoname_ids_json(geoname_ids_json, append_emoji)` - JSON array of geoname ids and emoji flag; MySQL `JSON, INT UNSIGNED`, PostgreSQL `jsonb, integer`.
+### Network lookup in every dataset
 
-PostgreSQL also generates narrowed network helpers when the corresponding IP
-version is enabled:
+Every generated namespace, including ASN and all other network-only editions,
+contains:
 
-* `find_ipv4_network_by_ip(ip)` - one IPv4 address; PostgreSQL `text`.
-* `find_ipv6_network_by_ip(ip)` - one IPv6 address; PostgreSQL `text`.
-* `find_ipv4_networks_by_ips_json(ips_json)` - JSON array of IPv4 strings; PostgreSQL `jsonb`.
-* `find_ipv6_networks_by_ips_json(ips_json)` - JSON array of IPv6 strings; PostgreSQL `jsonb`.
+* `find_network_by_ip(ip)`
+* `find_networks_by_json_ips(ips_json, page, per_page)`
+* `get_dataset_metadata()`
 
-Network-only databases do not generate geoname lookup helpers because they have
-no location tables. All databases generate `find_network_by_ip`, which returns
-the matching row from `ipv4` or `ipv6` with `network` and configured data
-columns. In MySQL, this procedure returns the column set for the matching IP
-family, so editions with different IPv4 and IPv6 columns can return different
-result shapes. PostgreSQL lookup functions keep one static `RETURNS TABLE`
-shape, using the union of configured IPv4 and IPv6 columns; use the narrowed
-PostgreSQL helpers when you need only the IPv4 or IPv6 output columns.
+Network lookup always uses one stable result shape: `status`, `ip`,
+`ip_version`, followed by the union of the configured IPv4/IPv6 output
+columns. A single lookup always returns exactly one row. Status is `ok` for a
+matching network, `not_found` for a valid address outside the dataset, and
+`invalid_ip` for invalid input. CIDR input such as `192.0.2.0/24` is not
+accepted as an IP address.
 
-All databases also generate `find_networks_by_ips_json`, which accepts a JSON
-array of IP strings. MySQL chooses the batch result shape from the input:
-IPv4-only inputs return IPv4 columns, IPv6-only inputs return IPv6 columns, and
-mixed or ambiguous inputs return the merged IPv4+IPv6 column set. Location
-databases generate the other JSON batch helpers. Batch helpers return one row
-per input item and include a 1-based `ord` column so the original JSON order
-can be restored after downstream joins. The MySQL batch network helper uses an
-internal temporary result table. MySQL temporary tables are scoped to the
-current connection, so concurrent sessions can safely use the same internal
-table name; only avoid running multiple statements concurrently on the same
-client connection.
+The JSON batch helper requires a top-level array and accepts 1-based `page` and
+positive `per_page` arguments. It preserves order and duplicates; `ord` is the
+absolute 1-based position in the original array. Every returned row also has
+`total_count`, the number of input elements before pagination, so a client can
+calculate `ceil(total_count / per_page)`. Strings are validated strictly; JSON
+`null`, objects, arrays, and invalid address strings produce an `invalid_ip`
+row without aborting the rest of the page.
 
-JSON batch examples from `maxmind_geoip2_city` loaded from the bundled test
-data:
+The stable union shape is intentional for mixed IPv4/IPv6 requests. For
+example, GeoIP2 User Count returns all configured IPv4 and IPv6 count columns
+from `find_networks_by_json_ips`; columns that do not apply to the matched IP
+family are null. The physical `ipv4` and `ipv6` tables still contain only the
+columns enabled for that family.
 
-```text
-maxmind_geoip2_city> CALL find_networks_by_ips_json(JSON_ARRAY(
-    '81.2.69.142','89.160.20.112','2001:218::'
-));
-+------+---------------+------------------+--------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+-----------------+------------+
-| ord  | ip            | network          | v_geoname_id | geoname_id | registered_country_geoname_id | represented_country_geoname_id | is_anonymous_proxy | is_satellite_provider | postal_code | latitude | longitude | accuracy_radius | is_anycast |
-+------+---------------+------------------+--------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+-----------------+------------+
-|    1 | 81.2.69.142   | 81.2.69.142/31   |      2643743 |    2643743 |                       6252001 |                           NULL |                  0 |                     0 | NULL        |  51.5142 |   -0.0931 |              10 |       NULL |
-|    2 | 89.160.20.112 | 89.160.20.112/28 |      2694762 |    2694762 |                       2921044 |                           NULL |                  0 |                     0 | NULL        |  58.4167 |   15.6167 |              76 |       NULL |
-|    3 | 2001:218::    | 2001:218::/32    |      1861060 |    1861060 |                       1861060 |                           NULL |                  0 |                     0 | NULL        |  35.6854 |  139.7531 |             100 |       NULL |
-+------+---------------+------------------+--------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+-----------------+------------+
-```
+PostgreSQL additionally provides IP-family-specific helpers when that family
+is enabled:
 
-```text
-maxmind_geoip2_city> CALL find_geoname_ids_by_ips_json(JSON_ARRAY(
-    '2.2.3.0','2.3.3.0','2.125.160.216','67.43.156.0',
-    '81.2.69.142','81.2.69.144','81.2.69.160','81.2.69.192',
-    '89.160.20.112','89.160.20.128','149.101.100.0','175.16.199.0',
-    '202.196.224.0','214.0.0.0','214.0.1.0','214.78.120.0',
-    '216.160.83.56','2001:218::','2001:220::','2001:230::',
-    '2001:238::','2001:240::','2001:250::','2001:252::',
-    '2001:254::','2001:256::','2001:258::','2001:260::',
-    '2001:268::','2001:270::'
-));
-+------+---------------+------------+
-| ord  | ip            | geoname_id |
-+------+---------------+------------+
-|    1 | 2.2.3.0       |    2655045 |
-|    2 | 2.3.3.0       |    6255148 |
-|    3 | 2.125.160.216 |    2655045 |
-|    4 | 67.43.156.0   |    1252634 |
-|    5 | 81.2.69.142   |    2643743 |
-|    6 | 81.2.69.144   |    2643743 |
-|    7 | 81.2.69.160   |    2643743 |
-|    8 | 81.2.69.192   |    2643743 |
-|    9 | 89.160.20.112 |    2694762 |
-|   10 | 89.160.20.128 |    2694762 |
-|   11 | 149.101.100.0 |    6252001 |
-|   12 | 175.16.199.0  |    2038180 |
-|   13 | 202.196.224.0 |    1694008 |
-|   14 | 214.0.0.0     |    1880252 |
-|   15 | 214.0.1.0     |    2158177 |
-|   16 | 214.78.120.0  |    5391811 |
-|   17 | 216.160.83.56 |    5803556 |
-|   18 | 2001:218::    |    1861060 |
-|   19 | 2001:220::    |    1835841 |
-|   20 | 2001:230::    |    1835841 |
-|   21 | 2001:238::    |    1668284 |
-|   22 | 2001:240::    |    1861060 |
-|   23 | 2001:250::    |    1814991 |
-|   24 | 2001:252::    |    1814991 |
-|   25 | 2001:254::    |    1814991 |
-|   26 | 2001:256::    |    1814991 |
-|   27 | 2001:258::    |    1861060 |
-|   28 | 2001:260::    |    1861060 |
-|   29 | 2001:268::    |    1861060 |
-|   30 | 2001:270::    |    1835841 |
-+------+---------------+------------+
-```
+* `find_ipv4_network_by_ip(ip)` and `find_ipv6_network_by_ip(ip)`
+* `find_ipv4_networks_by_json_ips(ips_json, page, per_page)` and
+  `find_ipv6_networks_by_json_ips(ips_json, page, per_page)`
 
-```text
-maxmind_geoip2_city> CALL find_geoinfo_by_ips_json(JSON_ARRAY(
-    '81.2.69.142','89.160.20.112','2001:218::'
-));
-+------+---------------+------------+------------------+------------------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------------------+---------------------------------------------+-----------------------------+----------------------------------------------------------------------+
-| ord  | ip            | geoname_id | country_iso_code | location_en                                          | location_ru                                                | location_de                               | location_es                                 | location_fr                                            | location_ja                                                           | location_pt_br                              | location_zh_cn              | location_mix                                                         |
-+------+---------------+------------+------------------+------------------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------------------+---------------------------------------------+-----------------------------+----------------------------------------------------------------------+
-|    1 | 81.2.69.142   |    2643743 | GB               | Europe - United Kingdom - England - London           | Европа - Великобритания - Лондон                           | Europa - Vereinigtes Königreich - London  | Europa - Reino Unido - Inglaterra - Londres | Europe - Royaume-Uni - Angleterre - Londres            | ヨーロッパ - イギリス - ロンドン                                      | Europa - Reino Unido - Inglaterra - Londres | 欧洲 - 英国                 | Европа - Великобритания - England - Лондон                           |
-|    2 | 89.160.20.112 |    2694762 | SE               | Europe - Sweden - Östergötland County - Linköping    | Европа - Швеция                                            | Europa - Schweden - Linköping             | Europa - Suecia                             | Europe - Suède - Comté d'Östergötland - Linköping      | ヨーロッパ - スウェーデン王国 - リンシェーピング                      | Europa - Suécia                             | 欧洲 - 瑞典 - 林雪平        | Европа - Швеция - Östergötland County - Linköping                    |
-|    3 | 2001:218::    |    1861060 | JP               | Asia - Japan                                         | Азия - Япония                                              | Asien - Japan                             | Asia - Japón                                | Asie - Japon                                           | アジア - 日本                                                         | Ásia - Japão                                | 亚洲 - 日本                 | Азия - Япония                                                        |
-+------+---------------+------------+------------------+------------------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------------------+---------------------------------------------+-----------------------------+----------------------------------------------------------------------+
-```
-
-```text
-maxmind_geoip2_city> CALL find_geoinfo_by_geoname_ids_json(JSON_ARRAY(
-    2643743,2694762,1861060
-));
-+------+------------+------------------+------------------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------------------+---------------------------------------------+-----------------------------+----------------------------------------------------------------------+
-| ord  | geoname_id | country_iso_code | location_en                                          | location_ru                                                | location_de                               | location_es                                 | location_fr                                            | location_ja                                                           | location_pt_br                              | location_zh_cn              | location_mix                                                         |
-+------+------------+------------------+------------------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------------------+---------------------------------------------+-----------------------------+----------------------------------------------------------------------+
-|    1 |    2643743 | GB               | Europe - United Kingdom - England - London           | Европа - Великобритания - Лондон                           | Europa - Vereinigtes Königreich - London  | Europa - Reino Unido - Inglaterra - Londres | Europe - Royaume-Uni - Angleterre - Londres            | ヨーロッパ - イギリス - ロンドン                                      | Europa - Reino Unido - Inglaterra - Londres | 欧洲 - 英国                 | Европа - Великобритания - England - Лондон                           |
-|    2 |    2694762 | SE               | Europe - Sweden - Östergötland County - Linköping    | Европа - Швеция                                            | Europa - Schweden - Linköping             | Europa - Suecia                             | Europe - Suède - Comté d'Östergötland - Linköping      | ヨーロッパ - スウェーデン王国 - リンシェーピング                      | Europa - Suécia                             | 欧洲 - 瑞典 - 林雪平        | Европа - Швеция - Östergötland County - Linköping                    |
-|    3 |    1861060 | JP               | Asia - Japan                                         | Азия - Япония                                              | Asien - Japan                             | Asia - Japón                                | Asie - Japon                                           | アジア - 日本                                                         | Ásia - Japão                                | 亚洲 - 日本                 | Азия - Япония                                                        |
-+------+------------+------------------+------------------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+--------------------------------------------------------+-----------------------------------------------------------------------+---------------------------------------------+-----------------------------+----------------------------------------------------------------------+
-```
-
-```text
-maxmind_geoip2_city> CALL build_location_mixes_by_geoname_ids_json(JSON_ARRAY(
-    102358,130758,174982,248816,272103,285570,290291,290557,294640,298795,
-    587116,630336,660013,690791,719819,732800,783754,798544,798549,1252634,
-    1668284,1694008,1814991,1819730,1835841,1861060,1880251,1880252,2017370,2038180
-), 1);
-+------+------------+-----------------------------------------+--------------------------------------------+
-| ord  | geoname_id | location_mix                            | location_mix_iso                           |
-+------+------------+-----------------------------------------+--------------------------------------------+
-|    1 |     102358 | Азия - 🇸🇦 Саудовская Аравия              | Азия - [SA] Саудовская Аравия              |
-|    2 |     130758 | Азия - 🇮🇷 Иран                           | Азия - [IR] Иран                           |
-|    3 |     174982 | Азия - 🇦🇲 Армения                        | Азия - [AM] Армения                        |
-|    4 |     248816 | Азия - 🇯🇴 Иордания                       | Азия - [JO] Иордания                       |
-|    5 |     272103 | Азия - 🇱🇧 Ливан                          | Азия - [LB] Ливан                          |
-|    6 |     285570 | Азия - 🇰🇼 Кувейт                         | Азия - [KW] Кувейт                         |
-|    7 |     290291 | Азия - 🇧🇭 Бахрейн                        | Азия - [BH] Бахрейн                        |
-|    8 |     290557 | Азия - 🇦🇪 Объединенные Арабские Эмираты  | Азия - [AE] Объединенные Арабские Эмираты  |
-|    9 |     294640 | Азия - 🇮🇱 Израиль                        | Азия - [IL] Израиль                        |
-|   10 |     298795 | Азия - 🇹🇷 Турция                         | Азия - [TR] Турция                         |
-|   11 |     587116 | Азия - 🇦🇿 Азербайджан                    | Азия - [AZ] Азербайджан                    |
-|   12 |     630336 | Европа - 🇧🇾 Беларусь                     | Европа - [BY] Беларусь                     |
-|   13 |     660013 | Европа - 🇫🇮 Финляндия                    | Европа - [FI] Финляндия                    |
-|   14 |     690791 | Европа - 🇺🇦 Украина                      | Европа - [UA] Украина                      |
-|   15 |     719819 | Европа - 🇭🇺 Венгрия                      | Европа - [HU] Венгрия                      |
-|   16 |     732800 | Европа - 🇧🇬 Болгария                     | Европа - [BG] Болгария                     |
-|   17 |     783754 | Европа - 🇦🇱 Албания                      | Европа - [AL] Албания                      |
-|   18 |     798544 | Европа - 🇵🇱 Польша                       | Европа - [PL] Польша                       |
-|   19 |     798549 | Европа - 🇷🇴 Румыния                      | Европа - [RO] Румыния                      |
-|   20 |    1252634 | Азия - 🇧🇹 Бутан                          | Азия - [BT] Бутан                          |
-|   21 |    1668284 | Азия - 🇹🇼 Тайвань                        | Азия - [TW] Тайвань                        |
-|   22 |    1694008 | Азия - 🇵🇭 Филиппины                      | Азия - [PH] Филиппины                      |
-|   23 |    1814991 | Азия - 🇨🇳 Китай                          | Азия - [CN] Китай                          |
-|   24 |    1819730 | Азия - 🇭🇰 Гонконг                        | Азия - [HK] Гонконг                        |
-|   25 |    1835841 | Азия - 🇰🇷 Южная Корея                    | Азия - [KR] Южная Корея                    |
-|   26 |    1861060 | Азия - 🇯🇵 Япония                         | Азия - [JP] Япония                         |
-|   27 |    1880251 | Азия - 🇸🇬 Сингапур                       | Азия - [SG] Сингапур                       |
-|   28 |    1880252 | Азия - 🇸🇬 Сингапур                       | Азия - [SG] Сингапур                       |
-|   29 |    2017370 | Европа - 🇷🇺 Россия                       | Европа - [RU] Россия                       |
-|   30 |    2038180 | Азия - 🇨🇳 Китай - Jilin Sheng - Чанчунь  | Азия - [CN] Китай - Jilin Sheng - Чанчунь  |
-+------+------------+-----------------------------------------+--------------------------------------------+
-```
-
-MySQL examples from the bundled test data loaded into MySQL 8.0:
-
-Network-only `find_network_by_ip` outputs from the same MySQL test data. Some
-schemas use different IPs because the bundled example ranges are
-dataset-specific:
-
-#### GeoIP2-Anonymous-IP-CSV (`maxmind_anonymous_ip`):
-
-```text
-maxmind_anonymous_ip> CALL find_network_by_ip('81.2.69.142');
-+--------------+--------------+------------------+---------------------+-----------------+------------------+----------------------+
-| network      | is_anonymous | is_anonymous_vpn | is_hosting_provider | is_public_proxy | is_tor_exit_node | is_residential_proxy |
-+--------------+--------------+------------------+---------------------+-----------------+------------------+----------------------+
-| 81.2.69.0/24 |            1 |                1 |                   1 |               1 |                1 |                    1 |
-+--------------+--------------+------------------+---------------------+-----------------+------------------+----------------------+
-```
-
-#### GeoIP-Anonymous-Plus-CSV (`maxmind_anonymous_plus`):
-
-```text
-maxmind_anonymous_plus> CALL find_network_by_ip('81.2.69.142');
-+--------------+--------------+------------------+---------------------+-----------------+------------------+----------------------+---------------+-----------------------+-------------------+
-| network      | is_anonymous | is_anonymous_vpn | is_hosting_provider | is_public_proxy | is_tor_exit_node | is_residential_proxy | provider_name | anonymizer_confidence | network_last_seen |
-+--------------+--------------+------------------+---------------------+-----------------+------------------+----------------------+---------------+-----------------------+-------------------+
-| 81.2.69.0/24 |            1 |                1 |                   1 |               1 |                1 |                    1 | NULL          |                  NULL | NULL              |
-+--------------+--------------+------------------+---------------------+-----------------+------------------+----------------------+---------------+-----------------------+-------------------+
-```
-
-#### GeoLite2-ASN-CSV (`maxmind_asn`):
-
-```text
-maxmind_asn> CALL find_network_by_ip('1.0.0.0');
-+------------+--------------------------+--------------------------------+
-| network    | autonomous_system_number | autonomous_system_organization |
-+------------+--------------------------+--------------------------------+
-| 1.0.0.0/24 |                    15169 | Google Inc.                    |
-+------------+--------------------------+--------------------------------+
-```
-
-Location database examples use the same helper set across GeoIP2, GeoLite2,
-and Enterprise schemas.
-
-#### GeoIP2-City-CSV (`maxmind_geoip2_city`):
-
-```text
-maxmind_geoip2_city> SELECT find_geoname_id_by_ip('81.2.69.142') AS geoname_id;
-+------------+
-| geoname_id |
-+------------+
-|    2643743 |
-+------------+
-```
-
-```text
-maxmind_geoip2_city> CALL find_geoinfo_by_ip('81.2.69.142');
-+------------------+--------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+---------------------------------------------+-----------------------------------------------+---------------------------------------------+-----------------+----------------------------------------------------------------------+
-| country_iso_code | location_en                                | location_ru                                                | location_de                               | location_es                                 | location_fr                                 | location_ja                                   | location_pt_br                              | location_zh_cn  | location_mix                                                         |
-+------------------+--------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+---------------------------------------------+-----------------------------------------------+---------------------------------------------+-----------------+----------------------------------------------------------------------+
-| GB               | Europe - United Kingdom - England - London | Европа - Великобритания - Лондон                           | Europa - Vereinigtes Königreich - London  | Europa - Reino Unido - Inglaterra - Londres | Europe - Royaume-Uni - Angleterre - Londres | ヨーロッパ - イギリス - ロンドン              | Europa - Reino Unido - Inglaterra - Londres | 欧洲 - 英国     | Европа - Великобритания - England - Лондон                           |
-+------------------+--------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+---------------------------------------------+-----------------------------------------------+---------------------------------------------+-----------------+----------------------------------------------------------------------+
-```
-
-```text
-maxmind_geoip2_city> SELECT build_location_mix(find_geoname_id_by_ip('81.2.69.142'), 1) AS location_mix;
-+-----------------------------------------------+
-| location_mix                                  |
-+-----------------------------------------------+
-| Европа - 🇬🇧 Великобритания - England - Лондон |
-+-----------------------------------------------+
-```
-
-```text
-maxmind_geoip2_city> SELECT build_location_mix_with_iso_code(find_geoname_id_by_ip('81.2.69.142')) AS location_mix_iso;
-+-------------------------------------------------+
-| location_mix_iso                                |
-+-------------------------------------------------+
-| Европа - [GB] Великобритания - England - Лондон |
-+-------------------------------------------------+
-```
-
-#### GeoLite2-City-CSV (`maxmind_geolite2_city`):
-
-```text
-maxmind_geolite2_city> SELECT find_geoname_id_by_ip('81.2.69.142') AS geoname_id;
-+------------+
-| geoname_id |
-+------------+
-|    2650444 |
-+------------+
-```
-
-```text
-maxmind_geolite2_city> CALL find_geoinfo_by_ip('81.2.69.142');
-+------------------+------------------------------------------------------------+----------------------------------------------------------------------+--------------------------------------------------+---------------------------------------------------+------------------------------------------------------------+-----------------------------------------------------------------------------------+-----------------------------------+-----------------------------+-------------------------------------------------------------------------------+
-| country_iso_code | location_en                                                | location_ru                                                          | location_de                                      | location_es                                       | location_fr                                                | location_ja                                                                       | location_pt_br                    | location_zh_cn              | location_mix                                                                  |
-+------------------+------------------------------------------------------------+----------------------------------------------------------------------+--------------------------------------------------+---------------------------------------------------+------------------------------------------------------------+-----------------------------------------------------------------------------------+-----------------------------------+-----------------------------+-------------------------------------------------------------------------------+
-| GB               | Europe - United Kingdom - England - Barnet - East Finchley | Европа - Британия - Англия - Ист-Финчли                              | Europa - UK - England - London Borough of Barnet | Europa - Reino Unido - Inglaterra - East Finchley | Europe - Royaume-Uni - Angleterre - Barnet - East Finchley | ヨーロッパ - 英国 - イングランド - イースト・フィンチリー                         | Europa - Reino Unido - Inglaterra | 欧洲 - 英国 - 英格兰        | Европа - Британия - Англия - Barnet - Ист-Финчли                              |
-+------------------+------------------------------------------------------------+----------------------------------------------------------------------+--------------------------------------------------+---------------------------------------------------+------------------------------------------------------------+-----------------------------------------------------------------------------------+-----------------------------------+-----------------------------+-------------------------------------------------------------------------------+
-```
-
-```text
-maxmind_geolite2_city> SELECT build_location_mix(find_geoname_id_by_ip('81.2.69.142'), 1) AS location_mix;
-+-----------------------------------------------------+
-| location_mix                                        |
-+-----------------------------------------------------+
-| Европа - 🇬🇧 Британия - Англия - Barnet - Ист-Финчли |
-+-----------------------------------------------------+
-```
-
-```text
-maxmind_geolite2_city> SELECT build_location_mix_with_iso_code(find_geoname_id_by_ip('81.2.69.142')) AS location_mix_iso;
-+-------------------------------------------------------+
-| location_mix_iso                                      |
-+-------------------------------------------------------+
-| Европа - [GB] Британия - Англия - Barnet - Ист-Финчли |
-+-------------------------------------------------------+
-```
-
-Every generated MySQL schema also has `inet6_aton_decimal(ip)`, an internal
-helper used by lookup routines. It is useful for ad hoc IPv6 range lookups:
+Examples:
 
 ```sql
-USE maxmind_geolite2_city;
-
-SELECT
-  network,
-  start_ip,
-  last_ip,
-  v_geoname_id,
-  geoname_id,
-  registered_country_geoname_id,
-  represented_country_geoname_id,
-  is_anonymous_proxy,
-  is_satellite_provider,
-  postal_code,
-  latitude,
-  longitude,
-  accuracy_radius,
-  is_anycast
-FROM (
-  SELECT *
-  FROM ipv6
-  WHERE start_ip <= inet6_aton_decimal('2001:218::')
-  ORDER BY start_ip DESC
-  LIMIT 1
-) AS candidate
-WHERE candidate.last_ip >= inet6_aton_decimal('2001:218::');
-```
-
-```text
-+---------------+----------------------------------------+----------------------------------------+--------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+-----------------+------------+
-| network       | start_ip                               | last_ip                                | v_geoname_id | geoname_id | registered_country_geoname_id | represented_country_geoname_id | is_anonymous_proxy | is_satellite_provider | postal_code | latitude | longitude | accuracy_radius | is_anycast |
-+---------------+----------------------------------------+----------------------------------------+--------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+-----------------+------------+
-| 2001:218::/35 | 42540530628270950406235306564857626624 | 42540530638174470720518348764050620415 |      1861060 |    1861060 |                       1861060 |                           NULL |                  0 |                     0 | NULL        |  35.6900 |  139.6900 |             500 |       NULL |
-+---------------+----------------------------------------+----------------------------------------+--------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+-----------------+------------+
-```
-
-#### GeoIP2-Connection-Type-CSV (`maxmind_connection_type`):
-
-```text
-maxmind_connection_type> CALL find_network_by_ip('1.0.0.0');
-+------------+-----------------+
-| network    | connection_type |
-+------------+-----------------+
-| 1.0.0.0/24 | Cable/DSL       |
-+------------+-----------------+
-```
-
-#### GeoIP2-Country-CSV (`maxmind_geoip2_country`):
-
-```text
-maxmind_geoip2_country> SELECT find_geoname_id_by_ip('81.2.69.142') AS geoname_id;
-+------------+
-| geoname_id |
-+------------+
-|    2635167 |
-+------------+
-```
-
-```text
-maxmind_geoip2_country> CALL find_geoinfo_by_ip('81.2.69.142');
-+------------------+-------------------------+---------------------------------------------+----------------------------------+----------------------+----------------------+--------------------------------+----------------------+-----------------+---------------------------------------------+
-| country_iso_code | location_en             | location_ru                                 | location_de                      | location_es          | location_fr          | location_ja                    | location_pt_br       | location_zh_cn  | location_mix                                |
-+------------------+-------------------------+---------------------------------------------+----------------------------------+----------------------+----------------------+--------------------------------+----------------------+-----------------+---------------------------------------------+
-| GB               | Europe - United Kingdom | Европа - Великобритания                     | Europa - Vereinigtes Königreich  | Europa - Reino Unido | Europe - Royaume-Uni | ヨーロッパ - イギリス          | Europa - Reino Unido | 欧洲 - 英国     | Европа - Великобритания                     |
-+------------------+-------------------------+---------------------------------------------+----------------------------------+----------------------+----------------------+--------------------------------+----------------------+-----------------+---------------------------------------------+
-```
-
-```text
-maxmind_geoip2_country> SELECT build_location_mix(find_geoname_id_by_ip('81.2.69.142'), 1) AS location_mix;
-+----------------------------+
-| location_mix               |
-+----------------------------+
-| Европа - 🇬🇧 Великобритания |
-+----------------------------+
-```
-
-```text
-maxmind_geoip2_country> SELECT build_location_mix_with_iso_code(find_geoname_id_by_ip('81.2.69.142')) AS location_mix_iso;
-+------------------------------+
-| location_mix_iso             |
-+------------------------------+
-| Европа - [GB] Великобритания |
-+------------------------------+
-```
-
-#### GeoLite2-Country-CSV (`maxmind_geolite2_country`):
-
-```text
-maxmind_geolite2_country> SELECT find_geoname_id_by_ip('81.2.69.142') AS geoname_id;
-+------------+
-| geoname_id |
-+------------+
-|    2635167 |
-+------------+
-```
-
-```text
-maxmind_geolite2_country> CALL find_geoinfo_by_ip('81.2.69.142');
-+------------------+-------------------------+---------------------------------+-------------+----------------------+----------------------+--------------------------+----------------------+-----------------+---------------------------------+
-| country_iso_code | location_en             | location_ru                     | location_de | location_es          | location_fr          | location_ja              | location_pt_br       | location_zh_cn  | location_mix                    |
-+------------------+-------------------------+---------------------------------+-------------+----------------------+----------------------+--------------------------+----------------------+-----------------+---------------------------------+
-| GB               | Europe - United Kingdom | Европа - Британия               | Europa - UK | Europa - Reino Unido | Europe - Royaume-Uni | ヨーロッパ - 英国        | Europa - Reino Unido | 欧洲 - 英国     | Европа - Британия               |
-+------------------+-------------------------+---------------------------------+-------------+----------------------+----------------------+--------------------------+----------------------+-----------------+---------------------------------+
-```
-
-```text
-maxmind_geolite2_country> SELECT build_location_mix(find_geoname_id_by_ip('81.2.69.142'), 1) AS location_mix;
-+----------------------+
-| location_mix         |
-+----------------------+
-| Европа - 🇬🇧 Британия |
-+----------------------+
-```
-
-```text
-maxmind_geolite2_country> SELECT build_location_mix_with_iso_code(find_geoname_id_by_ip('81.2.69.142')) AS location_mix_iso;
-+------------------------+
-| location_mix_iso       |
-+------------------------+
-| Европа - [GB] Британия |
-+------------------------+
-```
-
-#### GeoIP2-Domain-CSV (`maxmind_domain`):
-
-```text
-maxmind_domain> CALL find_network_by_ip('81.2.69.142');
-+--------------+--------------+
-| network      | domain       |
-+--------------+--------------+
-| 81.2.64.0/19 | in-addr.arpa |
-+--------------+--------------+
-```
-
-#### GeoIP2-Enterprise-CSV (`maxmind_enterprise`):
-
-```text
-maxmind_enterprise> SELECT find_geoname_id_by_ip('81.2.69.170') AS geoname_id;
-+------------+
-| geoname_id |
-+------------+
-|    2643743 |
-+------------+
-```
-
-```text
-maxmind_enterprise> CALL find_geoinfo_by_ip('81.2.69.170');
-+------------------+--------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+---------------------------------------------+-----------------------------------------------+---------------------------------------------+-----------------+----------------------------------------------------------------------+
-| country_iso_code | location_en                                | location_ru                                                | location_de                               | location_es                                 | location_fr                                 | location_ja                                   | location_pt_br                              | location_zh_cn  | location_mix                                                         |
-+------------------+--------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+---------------------------------------------+-----------------------------------------------+---------------------------------------------+-----------------+----------------------------------------------------------------------+
-| GB               | Europe - United Kingdom - England - London | Европа - Великобритания - Лондон                           | Europa - Vereinigtes Königreich - London  | Europa - Reino Unido - Inglaterra - Londres | Europe - Royaume-Uni - Angleterre - Londres | ヨーロッパ - イギリス - ロンドン              | Europa - Reino Unido - Inglaterra - Londres | 欧洲 - 英国     | Европа - Великобритания - England - Лондон                           |
-+------------------+--------------------------------------------+------------------------------------------------------------+-------------------------------------------+---------------------------------------------+---------------------------------------------+-----------------------------------------------+---------------------------------------------+-----------------+----------------------------------------------------------------------+
-```
-
-```text
-maxmind_enterprise> SELECT build_location_mix(find_geoname_id_by_ip('81.2.69.170'), 1) AS location_mix;
-+-----------------------------------------------+
-| location_mix                                  |
-+-----------------------------------------------+
-| Европа - 🇬🇧 Великобритания - England - Лондон |
-+-----------------------------------------------+
-```
-
-```text
-maxmind_enterprise> SELECT build_location_mix_with_iso_code(find_geoname_id_by_ip('81.2.69.170')) AS location_mix_iso;
-+-------------------------------------------------+
-| location_mix_iso                                |
-+-------------------------------------------------+
-| Европа - [GB] Великобритания - England - Лондон |
-+-------------------------------------------------+
-```
-
-Enterprise also creates the `isp` table and adds Enterprise-specific columns to
-`ipv4`/`ipv6`. Use a direct range lookup when those columns are needed. The
-generated range index is on `(start_ip DESC, last_ip)`, so the query first
-finds the nearest candidate by `start_ip`, then verifies `last_ip`.
-
-```sql
-USE maxmind_enterprise;
-
-SELECT
-  b.network,
-  b.start_ip,
-  b.last_ip,
-  b.v_geoname_id,
-  b.geoname_id,
-  b.registered_country_geoname_id,
-  b.represented_country_geoname_id,
-  b.is_anonymous_proxy,
-  b.is_satellite_provider,
-  b.postal_code,
-  b.latitude,
-  b.longitude,
-  b.isp_id,
-  b.is_legitimate_proxy,
-  b.domain,
-  b.accuracy_radius,
-  b.country_confidence,
-  b.subdivision_confidence,
-  b.city_confidence,
-  b.postal_confidence,
-  b.is_anycast,
-  i.isp_id AS isp_isp_id,
-  i.isp,
-  i.organization,
-  i.autonomous_system_number,
-  i.autonomous_system_organization,
-  i.connection_type,
-  i.user_type,
-  i.mobile_country_code,
-  i.mobile_network_code
-FROM (
-  SELECT *
-  FROM ipv4
-  WHERE start_ip <= INET_ATON('81.2.69.170')
-  ORDER BY start_ip DESC
-  LIMIT 1
-) AS b
-LEFT JOIN isp AS i ON i.isp_id = b.isp_id
-WHERE b.last_ip >= INET_ATON('81.2.69.170');
-```
-
-```text
-+----------------+------------+------------+--------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+--------+---------------------+--------------+-----------------+--------------------+------------------------+-----------------+-------------------+------------+------------+----------------------+---------------------------+--------------------------+--------------------------------+-----------------+------------+---------------------+---------------------+
-| network        | start_ip   | last_ip    | v_geoname_id | geoname_id | registered_country_geoname_id | represented_country_geoname_id | is_anonymous_proxy | is_satellite_provider | postal_code | latitude | longitude | isp_id | is_legitimate_proxy | domain       | accuracy_radius | country_confidence | subdivision_confidence | city_confidence | postal_confidence | is_anycast | isp_isp_id | isp                  | organization              | autonomous_system_number | autonomous_system_organization | connection_type | user_type  | mobile_country_code | mobile_network_code |
-+----------------+------------+------------+--------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+--------+---------------------+--------------+-----------------+--------------------+------------------------+-----------------+-------------------+------------+------------+----------------------+---------------------------+--------------------------+--------------------------------+-----------------+------------+---------------------+---------------------+
-| 81.2.69.160/27 | 1359103392 | 1359103423 |      2643743 |    2643743 |                       6252001 |                           NULL |                  0 |                     0 | NULL        |  51.5142 |   -0.0931 |      3 |                NULL | in-addr.arpa |             100 |            99.0000 |                42.0000 |         42.0000 |              NULL |       NULL |          3 | Andrews & Arnold Ltd | STONEHOUSE office network |                     NULL | NULL                           | Corporate       | government | NULL                | NULL                |
-+----------------+------------+------------+--------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+--------+---------------------+--------------+-----------------+--------------------+------------------------+-----------------+-------------------+------------+------------+----------------------+---------------------------+--------------------------+--------------------------------+-----------------+------------+---------------------+---------------------+
-```
-
-#### GeoIP2-IP-Risk-CSV (`maxmind_ip_risk`):
-
-```text
-maxmind_ip_risk> CALL find_network_by_ip('214.2.3.0');
-+--------------+---------+--------------+------------------+---------------------+-----------------+------------------+----------------------+---------------+-----------------------+-------------------+
-| network      | ip_risk | is_anonymous | is_anonymous_vpn | is_hosting_provider | is_public_proxy | is_tor_exit_node | is_residential_proxy | provider_name | anonymizer_confidence | network_last_seen |
-+--------------+---------+--------------+------------------+---------------------+-----------------+------------------+----------------------+---------------+-----------------------+-------------------+
-| 214.2.3.0/30 | 25.0000 |            1 |                1 |                NULL |            NULL |             NULL |                 NULL | NULL          |                  NULL | NULL              |
-+--------------+---------+--------------+------------------+---------------------+-----------------+------------------+----------------------+---------------+-----------------------+-------------------+
-```
-
-#### GeoIP2-ISP-CSV (`maxmind_isp`):
-
-```text
-maxmind_isp> CALL find_network_by_ip('1.0.128.0');
-+--------------+----------------------------+----------------------------+--------------------------+--------------------------------+---------------------+---------------------+
-| network      | isp                        | organization               | autonomous_system_number | autonomous_system_organization | mobile_country_code | mobile_network_code |
-+--------------+----------------------------+----------------------------+--------------------------+--------------------------------+---------------------+---------------------+
-| 1.0.128.0/17 | TOT Public Company Limited | TOT Public Company Limited |                     NULL | NULL                           | NULL                | NULL                |
-+--------------+----------------------------+----------------------------+--------------------------+--------------------------------+---------------------+---------------------+
-```
-
-#### GeoIP-Residential-Proxy-CSV (`maxmind_residential_proxy`):
-
-```text
-maxmind_residential_proxy> CALL find_network_by_ip('6.0.42.17');
-+--------------+---------------+-----------------------+-------------------+
-| network      | provider_name | anonymizer_confidence | network_last_seen |
-+--------------+---------------+-----------------------+-------------------+
-| 6.0.42.17/32 | novada        |                    95 | 2026-05-14        |
-+--------------+---------------+-----------------------+-------------------+
-```
-
-#### GeoIP2-Static-IP-Score-CSV (`maxmind_static_ip_score`):
-
-```text
-maxmind_static_ip_score> CALL find_network_by_ip('81.2.69.142');
-+------------+--------+
-| network    | score  |
-+------------+--------+
-| 80.0.0.0/4 | 0.3400 |
-+------------+--------+
-```
-
-#### GeoIP2-User-Count-CSV (`maxmind_user_count`):
-
-```text
-maxmind_user_count> CALL find_network_by_ip('81.2.69.142');
-+------------+---------+---------+
-| network    | ipv4_24 | ipv4_32 |
-+------------+---------+---------+
-| 80.0.0.0/4 |       0 |       0 |
-+------------+---------+---------+
-```
-
-```text
-maxmind_user_count> CALL find_network_by_ip('::2:0:0:0');
-+--------------+---------+---------+---------+
-| network      | ipv6_32 | ipv6_48 | ipv6_64 |
-+--------------+---------+---------+---------+
-| ::2:0:0:0/79 |       0 |       0 |       0 |
-+--------------+---------+---------+---------+
-```
-
-```text
-maxmind_user_count> CALL find_networks_by_ips_json('["81.2.69.142","::2:0:0:0"]');
-+-----+-------------+--------------+---------+---------+---------+---------+---------+
-| ord | ip          | network      | ipv4_24 | ipv4_32 | ipv6_32 | ipv6_48 | ipv6_64 |
-+-----+-------------+--------------+---------+---------+---------+---------+---------+
-|   1 | 81.2.69.142 | 80.0.0.0/4   |       0 |       0 |    NULL |    NULL |    NULL |
-|   2 | ::2:0:0:0   | ::2:0:0:0/79 |    NULL |    NULL |       0 |       0 |       0 |
-+-----+-------------+--------------+---------+---------+---------+---------+---------+
-```
-
-PostgreSQL examples from the bundled test data loaded into PostgreSQL:
-
-```sql
-SELECT * FROM maxmind_anonymous_ip.find_network_by_ip('81.2.69.142');
-SELECT * FROM maxmind_anonymous_plus.find_network_by_ip('81.2.69.142');
-SELECT * FROM maxmind_asn.find_network_by_ip('1.0.0.0');
-SELECT * FROM maxmind_geoip2_city.find_geoinfo_by_ip('81.2.69.142');
-SELECT * FROM maxmind_geolite2_city.find_geoinfo_by_ip('81.2.69.142');
-SELECT * FROM maxmind_connection_type.find_network_by_ip('1.0.0.0');
-SELECT * FROM maxmind_geoip2_country.find_geoinfo_by_ip('81.2.69.142');
-SELECT * FROM maxmind_geolite2_country.find_geoinfo_by_ip('81.2.69.142');
-SELECT * FROM maxmind_domain.find_network_by_ip('81.2.69.142');
-SELECT * FROM maxmind_enterprise.find_geoinfo_by_ip('81.2.69.170');
-SELECT * FROM maxmind_ip_risk.find_network_by_ip('214.2.3.0');
-SELECT * FROM maxmind_isp.find_network_by_ip('1.0.128.0');
-SELECT * FROM maxmind_residential_proxy.find_network_by_ip('6.0.42.17');
-SELECT * FROM maxmind_static_ip_score.find_network_by_ip('81.2.69.142');
-SELECT * FROM maxmind_user_count.find_network_by_ip('81.2.69.142');
-SELECT * FROM maxmind_user_count.find_ipv4_network_by_ip('81.2.69.142');
-SELECT * FROM maxmind_user_count.find_ipv6_network_by_ip('::2:0:0:0');
-SELECT * FROM maxmind_user_count.find_ipv4_networks_by_ips_json(
-  '["81.2.69.142","89.160.20.112"]'::jsonb
+-- MySQL
+CALL maxmind_asn.find_network_by_ip('1.0.0.1');
+CALL maxmind_asn.find_networks_by_json_ips(
+    JSON_ARRAY('1.0.0.1', '203.0.113.1', 'bad', NULL), 1, 40
 );
-SELECT * FROM maxmind_user_count.find_ipv6_networks_by_ips_json(
-  '["::2:0:0:0"]'::jsonb
+
+-- PostgreSQL
+SELECT * FROM maxmind_asn.find_network_by_ip('1.0.0.1');
+SELECT * FROM maxmind_asn.find_networks_by_json_ips(
+    '["1.0.0.1", "203.0.113.1", "bad", null]'::jsonb, 1, 40
 );
 ```
 
-For MySQL, enable local infile support for imports. The generated loader passes
-`--local-infile=1`.
+### Effective GeoName IDs
+
+MaxMind's `geoname_id` is nullable. It is not interchangeable with
+`registered_country_geoname_id` or `represented_country_geoname_id`; each
+column describes a different role. Location network tables always add:
+
+* `e_geoname_id` — the effective location selected by the configured priority;
+* `e_geoname_source_code` — the exact source column used for that row.
+
+Each source role is stored only when its `columns.ipv4`/`columns.ipv6` setting
+is enabled. Effective values are still calculated from the raw Blocks CSV, so
+all three source columns may be disabled without losing `e_geoname_id`.
+
+The source codes have fixed meanings independent of configured priority:
+
+| Code | Source column |
+| ---: | --- |
+| `1` | `geoname_id` |
+| `2` | `registered_country_geoname_id` |
+| `3` | `represented_country_geoname_id` |
+
+The converter stores the value and source together. The `CHECK` constraint
+enforces their nullability and valid source codes; when a source role is also
+stored, it additionally enforces equality with `e_geoname_id`. It does not
+infer the source by comparing values, because two source columns can contain
+the same GeoName ID.
+When no configured source resolves to a loaded Location row, both effective
+columns are null and the network row is still retained. Generic network lookup
+has `status = 'ok'` because the network was found; the ID-focused location API
+uses `status = 'no_location'`. Enabled original IDs are returned as stored,
+and network flags and other edition-specific data remain available. For
+example, MaxMind's all-null-ID example rows carry anonymous-proxy, satellite,
+or anycast flags and must not be confused with a network absent from the data.
+
+Selection is intentionally two-pass. In configured priority order, the
+converter first chooses a source that resolves to a loaded Location row with a
+country ISO code; if none does, it chooses the first source that resolves to
+any loaded Location row. This preserves useful country-level output when a
+more specific source cannot supply it. `schema_version` identifies this
+algorithm, while metadata preserves the configured source order.
+
+Location schemas provide these ID-focused helpers:
+
+* `find_geoname_id_by_ip(ip)` returns the original MaxMind `geoname_id` only
+  and is generated only when that column is enabled for at least one selected
+  IP family;
+* `find_e_geoname_id_by_ip(ip)` returns `e_geoname_id`;
+* `find_geoname_ids_by_ip(ip)` returns the status, network, effective ID,
+  readable effective source, and the enabled original IDs;
+* `find_geoname_ids_by_json_ips(ips_json, page, per_page)` is the safe paged
+  batch form and includes `total_count`.
+
+The two `find_geoname_ids...` entry points use `ok`, `no_location`,
+`not_found`, and `invalid_ip`. `no_location` means that the IP matched a stored
+network but no configured source resolved to a loaded Location row. Their
+public result uses `e_geoname_id` and `e_geoname_source`; a
+column named `geoname_id` in these ID-focused results means the original
+MaxMind field. Result signatures contain the union of roles enabled for IPv4
+and IPv6. A role that is enabled only for the other family is returned as
+`NULL`.
+
+```sql
+-- MySQL
+CALL maxmind_geoip2_city.find_geoname_ids_by_ip('81.2.69.142');
+CALL maxmind_geoip2_city.find_geoname_ids_by_json_ips(
+    JSON_ARRAY('81.2.69.142', 'bad', NULL, '2001:218::'), 1, 40
+);
+
+-- PostgreSQL
+SELECT *
+FROM maxmind_geoip2_city.find_geoname_ids_by_ip('81.2.69.142');
+SELECT *
+FROM maxmind_geoip2_city.find_geoname_ids_by_json_ips(
+    '["81.2.69.142", "bad", null, "2001:218::"]'::jsonb, 1, 40
+);
+```
+
+### Location data and labels
+
+City, Country, and Enterprise schemas also generate:
+
+* `find_e_geoname_ids_by_json_ips(ips_json, page, per_page)`
+* `find_geoinfo_by_json_ips(ips_json, include_continent, include_iso_code,
+  include_emoji, page, per_page)`
+* `find_geoinfo_by_json_geoname_ids(geoname_ids_json, include_continent,
+  include_iso_code, include_emoji, page, per_page)`
+* `build_location_label_by_geoname_id(geoname_id, locale, include_continent,
+  include_iso_code, include_emoji)`
+* `build_location_labels_by_ip(ip, locales_json, include_continent,
+  include_iso_code, include_emoji)`
+* `build_location_labels_by_json_geoname_ids(geoname_ids_json, locale,
+  include_continent, include_iso_code, include_emoji, page, per_page)`
+
+The three include arguments use `0` or `1`.
+The two `find_geoinfo...` routines return `country_iso_code` when that source
+column is enabled and one `location_<locale>` column per configured locale.
+Their include arguments apply to every `location_<locale>` value. They do not
+return a separate `location_label`; use a `build_location_*` helper when one
+label for a selected locale is needed.
+
+The public ID columns of these batch routines are:
+
+| Routine | ID columns | Meaning |
+| --- | --- | --- |
+| `find_e_geoname_ids_by_json_ips` | `ip`, `e_geoname_id` | Effective ID selected from the configured source priority |
+| `find_geoinfo_by_json_ips` | `ip`, `geoname_id` | Location lookup key resolved from the matching network's `e_geoname_id` |
+| `find_geoinfo_by_json_geoname_ids` | `geoname_id` | Location lookup key supplied in the input JSON array |
+
+Thus, `geoname_id` in a geoinfo result is the Location lookup key used to build
+`country_iso_code` and `location_<locale>` values. If no Location row matches,
+the key is retained and the derived values are null. Use
+`find_e_geoname_ids_by_json_ips` when the public result must explicitly retain
+the effective-ID name `e_geoname_id`.
+
+`build_location_label_by_geoname_id` prefers the requested configured locale,
+then English when available, then the remaining configured locales. Fallback
+is applied independently to each hierarchy component, so a missing Russian
+city name can fall back to English without changing an available Russian
+country or subdivision name. Duplicate country/subdivision/city names are
+suppressed. Locale values are normalized (`_` to `-`, case-insensitive), and
+both `ru` and an accidentally JSON-encoded `"ru"` are accepted.
+
+`build_location_labels_by_ip` performs one network lookup, then returns one row
+per requested locale. It always returns the effective ID/source and
+`e_geoname_label`. Every enabled original role is followed by its own resolved
+label: `geoname_label`, `registered_country_label`, or
+`represented_country_label`. Disabled roles are omitted from the result. This
+is a normal many-to-one lookup: any number of network rows may refer to the
+same Location row. A missing role remains null and does not hide the others.
+
+All paged JSON routines use `page`/`per_page`, absolute `ord`, and
+`total_count`. The batch label builder also returns parsed `geoname_id`,
+`status`, and `location_label`. Status is `ok`, `not_found`, or
+`invalid_geoname_id`; one bad JSON element does not abort the page.
+
+```sql
+-- MySQL
+CALL maxmind_geoip2_city.find_geoinfo_by_json_ips(
+    JSON_ARRAY('81.2.69.142', '2001:218::'), 1, 1, 1, 1, 40
+);
+SELECT maxmind_geoip2_city.build_location_label_by_geoname_id(2643743, 'ru', 1, 1, 1);
+CALL maxmind_geoip2_city.build_location_labels_by_ip(
+    '81.2.69.142', JSON_ARRAY('ru', 'en'), 1, 1, 1
+);
+CALL maxmind_geoip2_city.build_location_labels_by_json_geoname_ids(
+    JSON_ARRAY(2643743, NULL, 'bad'), 'ru', 1, 1, 1, 1, 40
+);
+
+-- PostgreSQL
+SELECT * FROM maxmind_geoip2_city.find_geoinfo_by_json_ips(
+    '["81.2.69.142", "2001:218::"]'::jsonb, 1, 1, 1, 1, 40
+);
+SELECT maxmind_geoip2_city.build_location_label_by_geoname_id(2643743, 'ru', 1, 1, 1);
+SELECT * FROM maxmind_geoip2_city.build_location_labels_by_ip(
+    '81.2.69.142', '["ru", "en"]'::jsonb, 1, 1, 1
+);
+SELECT *
+FROM maxmind_geoip2_city.build_location_labels_by_json_geoname_ids(
+    '[2643743, null, "bad"]'::jsonb, 'ru', 1, 1, 1, 1, 40
+);
+```
+
+### Dataset metadata
+
+Every generated namespace contains one row in `dataset_metadata`. The same
+row is returned as native columns by `get_dataset_metadata()`. It records:
+
+* `run_id`, `edition_id`, and logical `archive_root`;
+* `source_build_date` and database-side `imported_at`;
+* `converter_version` and `schema_version`;
+* `dbms`, `project_name`, and `schema_name`;
+* JSON/JSONB arrays for `ip_versions`, `selected_locales`, `loaded_locales`,
+  and `e_geoname_id_priority_columns`.
+
+The metadata never stores the source URL, filesystem path, credentials,
+license key, or command line. Example archives have a null
+`source_build_date`. Network-only datasets use empty locale and GeoName
+priority arrays. Editions processed by one config invocation share a
+`run_id`.
+
+```sql
+-- MySQL
+CALL maxmind_asn.get_dataset_metadata();
+
+-- PostgreSQL
+SELECT * FROM maxmind_asn.get_dataset_metadata();
+```
+
+## Verified MySQL and PostgreSQL Examples
+
+The examples in this section were captured on 2026-08-20 from converter `1.3`
+output loaded into MySQL 8 and PostgreSQL 16. The test build used IPv4 and IPv6,
+all eight supported locales, and these inputs:
+
+* `GeoLite2-City-CSV_20260818.zip`,
+  `GeoLite2-Country-CSV_20260818.zip`, and
+  `GeoLite2-ASN-CSV_20260818.zip` for real data;
+* the bundled Example archives for Anonymous IP, Anonymous Plus, Connection
+  Type, Domain, IP Risk, ISP, Residential Proxy, Static IP Score, and User
+  Count.
+
+The post-import smoke run discovered 68 MySQL routines and executed 100 calls,
+then discovered 116 PostgreSQL routines and executed 136 calls. Both runs
+finished with zero failed calls; the additional calls cover paging, invalid
+inputs, both IP families, and alternate locale/flag combinations.
+
+The machines, caches, and archive versions affect timings, so these numbers are
+examples rather than benchmarks. MySQL client times are rounded to hundredths
+of a second; the table scan checklist below also gives exact `SHOW PROFILES`
+server durations. PostgreSQL times come from `psql` with `\timing on`.
+
+### Generated routine calls
+
+The equivalent single-IP ASN lookups are:
+
+```sql
+-- MySQL
+CALL maxmind_asn.find_network_by_ip('1.0.0.1');
+
+-- PostgreSQL
+SELECT * FROM maxmind_asn.find_network_by_ip('1.0.0.1');
+```
+
+Both return:
+
+```text
++--------+---------+------------+------------+--------------------------+--------------------------------+
+| status | ip      | ip_version | network    | autonomous_system_number | autonomous_system_organization |
++--------+---------+------------+------------+--------------------------+--------------------------------+
+| ok     | 1.0.0.1 |          4 | 1.0.0.0/24 |                    13335 | Cloudflare, Inc.               |
++--------+---------+------------+------------+--------------------------+--------------------------------+
+```
+
+Pagination is applied to input elements, preserves their absolute `ord`, and
+keeps `total_count` on every returned row. This asks for page 2 with two items
+per page:
+
+```sql
+-- MySQL
+CALL maxmind_asn.find_networks_by_json_ips(
+    JSON_ARRAY('1.0.0.1', '8.8.8.8', 'bad', NULL), 2, 2
+);
+
+-- PostgreSQL
+SELECT * FROM maxmind_asn.find_networks_by_json_ips(
+    '["1.0.0.1", "8.8.8.8", "bad", null]'::jsonb, 2, 2
+);
+```
+
+```text
++-----+-------------+------+------------+------------+---------+--------------------------+--------------------------------+
+| ord | total_count | ip   | status     | ip_version | network | autonomous_system_number | autonomous_system_organization |
++-----+-------------+------+------------+------------+---------+--------------------------+--------------------------------+
+|   3 |           4 | bad  | invalid_ip | NULL       | NULL    | NULL                     | NULL                           |
+|   4 |           4 | NULL | invalid_ip | NULL       | NULL    | NULL                     | NULL                           |
++-----+-------------+------+------------+------------+---------+--------------------------+--------------------------------+
+```
+
+Cloudflare for `1.0.0.1` and Google for `8.8.8.8`, with the same
+`total_count = 4`.
+
+The three original GeoName roles remain distinct from the effective value:
+
+```sql
+-- MySQL
+CALL maxmind_geolite2_city.find_geoname_ids_by_ip('81.2.69.142');
+
+-- PostgreSQL
+SELECT *
+FROM maxmind_geolite2_city.find_geoname_ids_by_ip('81.2.69.142');
+```
+
+```text
++--------+-------------+------------+----------------+--------------+------------------+------------+-------------------------------+--------------------------------+
+| status | ip          | ip_version | network        | e_geoname_id | e_geoname_source | geoname_id | registered_country_geoname_id | represented_country_geoname_id |
++--------+-------------+------------+----------------+--------------+------------------+------------+-------------------------------+--------------------------------+
+| ok     | 81.2.69.142 |          4 | 81.2.69.128/25 |      2651985 | geoname_id       |    2651985 |                       2635167 | NULL                           |
++--------+-------------+------------+----------------+--------------+------------------+------------+-------------------------------+--------------------------------+
+```
+
+Locale fallback is performed per label component. `Wiltshire` has no Russian
+value in this build, while the continent, country, and city do:
+
+```sql
+-- MySQL
+CALL maxmind_geolite2_city.build_location_labels_by_ip(
+    '81.2.69.142', JSON_ARRAY('ru', 'en'), 1, 1, 1
+);
+
+-- PostgreSQL
+SELECT * FROM maxmind_geolite2_city.build_location_labels_by_ip(
+    '81.2.69.142', '["ru", "en"]'::jsonb, 1, 1, 1
+);
+```
+
+The relevant result columns are:
+
+| ord | locale | status | e_geoname_id | e_geoname_source | e_geoname_label |
+| ---: | --- | --- | ---: | --- | --- |
+| 1 | `ru` | `ok` | 2651985 | `geoname_id` | `Европа - 🇬🇧 [GB] Британия - Англия - Wiltshire - Криклейд` |
+| 2 | `en` | `ok` | 2651985 | `geoname_id` | `Europe - 🇬🇧 [GB] United Kingdom - England - Wiltshire - Cricklade` |
+
+The full result also contains `geoname_label`, `registered_country_label`, and `represented_country_label` beside their IDs.
+
+The scalar helper uses the same fallback rules:
+
+```sql
+-- MySQL
+SELECT maxmind_geolite2_city.build_location_label_by_geoname_id(
+    2643743, 'ru', 1, 1, 1
+) AS location_label;
+
+-- PostgreSQL
+SELECT maxmind_geolite2_city.build_location_label_by_geoname_id(
+    2643743, 'ru', 1, 1, 1
+) AS location_label;
+```
+
+```text
+Европа - 🇬🇧 [GB] Британия - Англия - Лондон
+```
+
+Mixed-family batch lookup returns one stable User Count shape. Inapplicable
+family columns are null rather than being removed from individual rows:
+
+```sql
+-- MySQL
+CALL maxmind_user_count.find_networks_by_json_ips(
+    JSON_ARRAY('1.0.0.1', '::1:0:0:1'), 1, 40
+);
+
+-- PostgreSQL
+SELECT * FROM maxmind_user_count.find_networks_by_json_ips(
+    '["1.0.0.1", "::1:0:0:1"]'::jsonb, 1, 40
+);
+```
+
+| ord | total_count | ip | status | ip_version | network | ipv4_24 | ipv4_32 | ipv6_32 | ipv6_48 | ipv6_64 |
+| ---: | ---: | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 2 | `1.0.0.1` | `ok` | 4 | `1.0.0.0/15` | 0 | 0 | NULL | NULL | NULL |
+| 2 | 2 | `::1:0:0:1` | `ok` | 6 | `::1:0:0:0/80` | NULL | NULL | 0 | 0 | 0 |
+
+Metadata is available through either the table or the generated API:
+
+```sql
+-- MySQL
+CALL maxmind_geolite2_city.get_dataset_metadata();
+
+-- PostgreSQL
+SELECT * FROM maxmind_geolite2_city.get_dataset_metadata();
+```
+
+The captured rows have the following shared logical fields and expected
+run/DBMS-specific differences:
+
+| Field | MySQL | PostgreSQL |
+| --- | --- | --- |
+| `run_id` | `b20260820T171800Z_715` | `b20260820T172154Z_282` |
+| `edition_id` | `GeoLite2-City-CSV` | `GeoLite2-City-CSV` |
+| `archive_root` | `GeoLite2-City-CSV_20260818` | `GeoLite2-City-CSV_20260818` |
+| `source_build_date` | `2026-08-18` | `2026-08-18` |
+| `converter_version` | `1.3` | `1.3` |
+| `schema_version` | `4` | `4` |
+| `dbms` | `mysql` | `postgresql` |
+| `project_name` | `docs` | `docs` |
+| `schema_name` | `maxmind_geolite2_city` | `maxmind_geolite2_city` |
+| `ip_versions` | `[4, 6]` | `[4, 6]` |
+| `selected_locales` | `["de", "en", "es", "fr", "ja", "pt-BR", "ru", "zh-CN"]` | same |
+| `loaded_locales` | `["de", "en", "es", "fr", "ja", "pt-BR", "ru", "zh-CN"]` | same |
+| `e_geoname_id_priority_columns` | `["geoname_id", "registered_country_geoname_id", "represented_country_geoname_id"]` | same |
+
+### Physical table inventory
+
+This build produced 42 physical tables. Every generated namespace has its own
+one-row `dataset_metadata`; it is not a shared global table.
+
+| Namespace | Tables |
+| --- | --- |
+| `maxmind_anonymous_ip` | `dataset_metadata`, `ipv4`, `ipv6` |
+| `maxmind_anonymous_plus` | `dataset_metadata`, `ipv4`, `ipv6` |
+| `maxmind_asn` | `dataset_metadata`, `ipv4`, `ipv6` |
+| `maxmind_connection_type` | `dataset_metadata`, `ipv4`, `ipv6` |
+| `maxmind_domain` | `dataset_metadata`, `ipv4`, `ipv6` |
+| `maxmind_geolite2_city` | `city`, `country`, `dataset_metadata`, `ipv4`, `ipv6`, `subdivision1`, `subdivision2`, `timezone` |
+| `maxmind_geolite2_country` | `country`, `dataset_metadata`, `ipv4`, `ipv6` |
+| `maxmind_ip_risk` | `dataset_metadata`, `ipv4`, `ipv6` |
+| `maxmind_isp` | `dataset_metadata`, `ipv4`, `ipv6` |
+| `maxmind_residential_proxy` | `dataset_metadata`, `ipv4`, `ipv6` |
+| `maxmind_static_ip_score` | `dataset_metadata`, `ipv4`, `ipv6` |
+| `maxmind_user_count` | `dataset_metadata`, `ipv4`, `ipv6` |
+
+The following checklist is valid unchanged in both MySQL and PostgreSQL and
+touches every physical table. The `ORDER BY` makes sample rows reproducible.
+
+```sql
+-- GeoIP2 Anonymous IP
+SELECT * FROM maxmind_anonymous_ip.dataset_metadata;
+SELECT * FROM maxmind_anonymous_ip.ipv4;
+SELECT * FROM maxmind_anonymous_ip.ipv6;
+
+-- GeoIP Anonymous Plus
+SELECT * FROM maxmind_anonymous_plus.dataset_metadata;
+SELECT * FROM maxmind_anonymous_plus.ipv4;
+SELECT * FROM maxmind_anonymous_plus.ipv6;
+
+-- GeoLite2 ASN
+SELECT * FROM maxmind_asn.dataset_metadata;
+SELECT * FROM maxmind_asn.ipv4;
+SELECT * FROM maxmind_asn.ipv6;
+
+-- GeoIP2 Connection Type
+SELECT * FROM maxmind_connection_type.dataset_metadata;
+SELECT * FROM maxmind_connection_type.ipv4;
+SELECT * FROM maxmind_connection_type.ipv6;
+
+-- GeoIP2 Domain
+SELECT * FROM maxmind_domain.dataset_metadata;
+SELECT * FROM maxmind_domain.ipv4;
+SELECT * FROM maxmind_domain.ipv6;
+
+-- GeoLite2 City
+SELECT * FROM maxmind_geolite2_city.city;
+SELECT * FROM maxmind_geolite2_city.country;
+SELECT * FROM maxmind_geolite2_city.dataset_metadata;
+SELECT * FROM maxmind_geolite2_city.ipv4;
+SELECT * FROM maxmind_geolite2_city.ipv6;
+SELECT * FROM maxmind_geolite2_city.subdivision1;
+SELECT * FROM maxmind_geolite2_city.subdivision2;
+SELECT * FROM maxmind_geolite2_city.timezone;
+
+-- GeoLite2 Country
+SELECT * FROM maxmind_geolite2_country.country;
+SELECT * FROM maxmind_geolite2_country.dataset_metadata;
+SELECT * FROM maxmind_geolite2_country.ipv4;
+SELECT * FROM maxmind_geolite2_country.ipv6;
+
+-- GeoIP2 IP Risk
+SELECT * FROM maxmind_ip_risk.dataset_metadata;
+SELECT * FROM maxmind_ip_risk.ipv4;
+SELECT * FROM maxmind_ip_risk.ipv6;
+
+-- GeoIP2 ISP
+SELECT * FROM maxmind_isp.dataset_metadata;
+SELECT * FROM maxmind_isp.ipv4;
+SELECT * FROM maxmind_isp.ipv6;
+
+-- GeoIP Residential Proxy
+SELECT * FROM maxmind_residential_proxy.dataset_metadata;
+SELECT * FROM maxmind_residential_proxy.ipv4;
+SELECT * FROM maxmind_residential_proxy.ipv6;
+
+-- GeoIP2 Static IP Score
+SELECT * FROM maxmind_static_ip_score.dataset_metadata;
+SELECT * FROM maxmind_static_ip_score.ipv4;
+SELECT * FROM maxmind_static_ip_score.ipv6;
+
+-- GeoIP2 User Count
+SELECT * FROM maxmind_user_count.dataset_metadata;
+SELECT * FROM maxmind_user_count.ipv4;
+SELECT * FROM maxmind_user_count.ipv6;
+```
+
+All 42 statements completed successfully. The first result from every distinct
+network table is summarized below. `start_ip` and `last_ip` are omitted from the
+compact summary: MySQL renders them as integers, while PostgreSQL renders them
+as address boundaries, as shown in the full City example that follows.
+Each of the 12 `dataset_metadata` statements returned exactly one row with the
+14-column shape shown in the metadata example above and its own edition/schema
+values.
+
+| Table | First result: `network`; edition-specific values |
+| --- | --- |
+| `maxmind_anonymous_ip.ipv4` | `1.2.0.0/16`; anonymous = 1, anonymous VPN = 1, other flags = NULL |
+| `maxmind_anonymous_ip.ipv6` | `abcd:1000::/112`; anonymous = 1, public proxy = 1, other flags = NULL |
+| `maxmind_anonymous_plus.ipv4` | `1.2.0.0/32`; anonymous = 1, anonymous VPN = 1, provider/confidence/last-seen = NULL |
+| `maxmind_anonymous_plus.ipv6` | `2001:480:3a::/64`; anonymous = 1, public proxy = 1, provider/confidence/last-seen = NULL |
+| `maxmind_asn.ipv4` | `1.0.0.0/24`; ASN 13335, `Cloudflare, Inc.` |
+| `maxmind_asn.ipv6` | `2001:200::/37`; ASN 2500, `WIDE Project` |
+| `maxmind_connection_type.ipv4` | `1.0.0.0/24`; `Cable/DSL` |
+| `maxmind_connection_type.ipv6` | `2003::/24`; `Cable/DSL` |
+| `maxmind_domain.ipv4` | `1.2.0.0/16`; `maxmind.com` |
+| `maxmind_domain.ipv6` | `2a02:2770:3::/64`; `sgotti.org` |
+| `maxmind_geolite2_city.ipv4` | `1.0.0.0/24`; effective ID 2077456 from registered-country ID |
+| `maxmind_geolite2_city.ipv6` | `2001:200::/32`; effective ID 1861060, latitude 35.6900, longitude 139.6900 |
+| `maxmind_geolite2_country.ipv4` | `1.0.0.0/24`; effective ID 2077456 from registered-country ID |
+| `maxmind_geolite2_country.ipv6` | `2001:200::/32`; effective/original/registered ID 1861060 |
+| `maxmind_ip_risk.ipv4` | `214.2.3.0/30`; risk 25.00, anonymous = 1, anonymous VPN = 1 |
+| `maxmind_ip_risk.ipv6` | no rows in `GeoIP2-IP-Risk-CSV_Example.zip` |
+| `maxmind_isp.ipv4` | `1.0.128.0/17`; ISP and organization `TOT Public Company Limited` |
+| `maxmind_isp.ipv6` | `2001:1700::/27`; ASN 6730, `Sunrise Communications AG` |
+| `maxmind_residential_proxy.ipv4` | `6.0.42.17/32`; `novada`, confidence 95, last seen 2026-05-14 |
+| `maxmind_residential_proxy.ipv6` | `2001:480:1b20:fb4f::/64`; `lumiproxy`, confidence 65, last seen 2026-04-09 |
+| `maxmind_static_ip_score.ipv4` | `1.0.0.0/15`; score 0.01 |
+| `maxmind_static_ip_score.ipv6` | `::1:0:0:0/80`; score 1.48 |
+| `maxmind_user_count.ipv4` | `1.0.0.0/15`; `ipv4_24 = 0`, `ipv4_32 = 0` |
+| `maxmind_user_count.ipv6` | `::1:0:0:0/80`; `ipv6_32 = 0`, `ipv6_48 = 0`, `ipv6_64 = 0` |
+
+The normalized City dimension tables returned these first rows:
+
+| Table | First result |
+| --- | --- |
+| `maxmind_geolite2_city.timezone` | `id = 1`, `Africa/Abidjan` |
+| `maxmind_geolite2_city.country` | `id = 1`, continent Asia in all configured locales, no country ISO/name |
+| `maxmind_geolite2_city.subdivision1` | `id = 1`, ISO `02`, `Canillo` / `Канильо` |
+| `maxmind_geolite2_city.subdivision2` | `id = 1`, ISO `BAB`, `Babek Rayon`; other locale names NULL |
+| `maxmind_geolite2_city.city` | GeoName 11797, country 110, subdivision1 1115, `Afrā`, timezone 263 |
+
+This is the complete first City IPv4 row in MySQL:
+
+```text
+mysql> SELECT * FROM maxmind_geolite2_city.ipv4;
++------------+----------+----------+--------------+-----------------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+-----------------+------------+
+| network    | start_ip | last_ip  | e_geoname_id | e_geoname_source_code | geoname_id | registered_country_geoname_id | represented_country_geoname_id | is_anonymous_proxy | is_satellite_provider | postal_code | latitude | longitude | accuracy_radius | is_anycast |
++------------+----------+----------+--------------+-----------------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+-----------------+------------+
+| 1.0.0.0/24 | 16777216 | 16777471 |      2077456 |                     2 | NULL       |                       2077456 | NULL                           |                  0 |                     0 | NULL        | NULL     | NULL      | NULL            | NULL       |
++------------+----------+----------+--------------+-----------------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+-----------------+------------+
+```
+
+PostgreSQL returns the same logical row, with native `inet` boundaries and
+booleans:
+
+```text
+maxmind=> SELECT * FROM maxmind_geolite2_city.ipv4;
+  network   | start_ip |  last_ip  | e_geoname_id | e_geoname_source_code | geoname_id | registered_country_geoname_id | represented_country_geoname_id | is_anonymous_proxy | is_satellite_provider | postal_code | latitude | longitude | accuracy_radius | is_anycast
+------------+----------+-----------+--------------+-----------------------+------------+-------------------------------+--------------------------------+--------------------+-----------------------+-------------+----------+-----------+-----------------+-----------
+ 1.0.0.0/24 | 1.0.0.0  | 1.0.0.255 |      2077456 |                     2 |            |                       2077456 |                                | f                  | f                     |             |          |           |                 |
+(1 row)
+
+```
+
+The real Country archive provides all configured locale columns:
+
+```sql
+SELECT *
+FROM maxmind_geolite2_country.country
+ORDER BY geoname_id
+LIMIT 5;
+```
+
+| geoname_id | continent | iso | emoji | name_en | name_ru | name_de | name_es | name_fr | name_ja | name_pt-BR | name_zh-CN | EU |
+| ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 49518 | AF / Africa / Африка | RW | 🇷🇼 | Rwanda | Руанда | Ruanda | Ruanda | Rwanda | ルワンダ共和国 | Ruanda | 卢旺达 | 0 / `f` |
+| 51537 | AF / Africa / Африка | SO | 🇸🇴 | Somalia | Сомали | Somalia | Somalia | Somalie | ソマリア | Somália | 索马里 | 0 / `f` |
+| 69543 | AS / Asia / Азия | YE | 🇾🇪 | Yemen | Йемен | Jemen | Yemen | Yémen | イエメン共和国 | Iêmen | 也门 | 0 / `f` |
+| 99237 | AS / Asia / Азия | IQ | 🇮🇶 | Iraq | Ирак | Irak | Irak | Irak | イラク共和国 | Iraque | 伊拉克 | 0 / `f` |
+| 102358 | AS / Asia / Азия | SA | 🇸🇦 | Saudi Arabia | Саудовская Аравия | Saudi-Arabien | Arabia Saudí | Arabie saoudite | サウジアラビア王国 | Arábia Saudita | 沙特阿拉伯 | 0 / `f` |
+
+### Useful direct SQL
+
+These are queries over the generated tables for analyses that are intentionally
+not part of the lookup API.
+
+Find networks whose effective location came from
+`registered_country_geoname_id` rather than `geoname_id`:
+
+```sql
+SELECT network,
+       geoname_id,
+       registered_country_geoname_id,
+       represented_country_geoname_id,
+       e_geoname_id,
+       e_geoname_source_code
+FROM maxmind_geolite2_city.ipv4
+WHERE e_geoname_source_code = 2
+ORDER BY start_ip
+LIMIT 5;
+```
+
+| network | geoname_id | registered_country_geoname_id | represented_country_geoname_id | e_geoname_id | source code |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `1.0.0.0/24` | NULL | 2077456 | NULL | 2077456 | 2 |
+| `1.1.1.0/24` | NULL | 2077456 | NULL | 2077456 | 2 |
+| `2.58.104.0/24` | NULL | 798544 | NULL | 798544 | 2 |
+| `2.58.107.0/24` | NULL | 798544 | NULL | 798544 | 2 |
+| `5.200.5.0/24` | NULL | 2750405 | NULL | 2750405 | 2 |
+
+Resolve all three country roles independently. Repeated GeoName IDs across many
+networks are expected: a Location row is shared lookup data, not an IP owner.
+
+```sql
+SELECT n.network,
+       location.iso_code AS location_iso,
+       registered.iso_code AS registered_iso,
+       represented.iso_code AS represented_iso
+FROM maxmind_geolite2_country.ipv4 AS n
+LEFT JOIN maxmind_geolite2_country.country AS location
+       ON location.geoname_id = n.geoname_id
+LEFT JOIN maxmind_geolite2_country.country AS registered
+       ON registered.geoname_id = n.registered_country_geoname_id
+LEFT JOIN maxmind_geolite2_country.country AS represented
+       ON represented.geoname_id = n.represented_country_geoname_id
+WHERE n.geoname_id <> n.registered_country_geoname_id
+ORDER BY n.start_ip
+LIMIT 5;
+```
+
+| network | location_iso | registered_iso | represented_iso |
+| --- | --- | --- | --- |
+| `1.32.194.0/24` | `TW` | `SG` | NULL |
+| `1.32.197.0/24` | `TW` | `SG` | NULL |
+| `1.32.202.0/25` | `TW` | `SG` | NULL |
+| `1.32.203.0/25` | `TW` | `SG` | NULL |
+| `1.32.204.0/25` | `TW` | `SG` | NULL |
+
+Find ASNs represented by the largest number of IPv4 CIDR rows in the current
+archive. This measures rows, not address-space size:
+
+```sql
+SELECT autonomous_system_number,
+       autonomous_system_organization,
+       COUNT(*) AS ipv4_networks
+FROM maxmind_asn.ipv4
+GROUP BY autonomous_system_number, autonomous_system_organization
+ORDER BY ipv4_networks DESC
+LIMIT 5;
+```
+
+| ASN | Organization | IPv4 networks |
+| ---: | --- | ---: |
+| 7922 | Comcast Cable Communications, LLC | 24897 |
+| 7018 | AT&T Enterprises, LLC | 20326 |
+| 701 | Verizon Business | 14436 |
+| 4134 | Chinanet | 9389 |
+| 5650 | Frontier Communications of America, Inc. | 9339 |
+
+Audit effective-location coverage. The boolean aggregate syntax differs between
+the databases:
+
+```sql
+-- MySQL
+SELECT COUNT(*) AS networks,
+       SUM(e_geoname_id IS NULL) AS without_e_geoname_id,
+       ROUND(100.0 * SUM(e_geoname_id IS NULL) / COUNT(*), 2)
+           AS without_e_geoname_pct
+FROM maxmind_geolite2_city.ipv4;
+
+-- PostgreSQL
+SELECT COUNT(*) AS networks,
+       COUNT(*) FILTER (WHERE e_geoname_id IS NULL)
+           AS without_e_geoname_id,
+       ROUND(
+           100.0 * COUNT(*) FILTER (WHERE e_geoname_id IS NULL) / COUNT(*),
+           2
+       ) AS without_e_geoname_pct
+FROM maxmind_geolite2_city.ipv4;
+```
+
+```text
++----------+----------------------+-----------------------+
+| networks | without_e_geoname_id | without_e_geoname_pct |
++----------+----------------------+-----------------------+
+|  3704456 |                    0 |                  0.00 |
++----------+----------------------+-----------------------+
+```
+
+Find Example User Count networks with the largest combined IPv4 estimates:
+
+```sql
+SELECT network, ipv4_24, ipv4_32
+FROM maxmind_user_count.ipv4
+ORDER BY (ipv4_24 + ipv4_32) DESC, start_ip
+LIMIT 5;
+```
+
+| network | ipv4_24 | ipv4_32 |
+| --- | ---: | ---: |
+| `1.2.3.4/32` | 4 | 3 |
+| `214.2.3.4/32` | 4 | 3 |
+| `1.2.3.5/32` | 4 | 1 |
+| `1.2.3.6/32` | 4 | 1 |
+| `214.2.3.5/32` | 4 | 1 |
 
 ## Tests
 
 Example ZIP archives live in `test/data/`. The test configs use paths relative
-to the `test/` directory, such as `data/GeoIP2-Domain-CSV_Example.zip`.
+to the `test/` directory, such as `data/GeoLite2-Country-CSV_Example.zip`.
 
 `test/count-data.sh` counts rows directly from the source ZIP archives. It is
 useful for checking generated database row counts after an import:
 
 ```bash
 ./test/count-data.sh
-./test/count-data.sh GeoIP2-Connection-Type-CSV_Example.zip
+./test/count-data.sh GeoLite2-Country-CSV_Example.zip
 ```
 
 After loading the test SQL into MySQL or PostgreSQL, run
 `test/select-counts.sql` against the database and compare the results with
 `count-data.sh`. The SQL covers all schemas used by the current test configs,
-including network-only schemas, City/Country, and Enterprise.
+including network-only schemas, City/Country, and Enterprise. Its second result
+set checks that every `dataset_metadata` table contains exactly one row.
+
+Run `test/api-smoke.mysql.sql` or `test/api-smoke.postgresql.sql` to exercise
+strict IP validation, ordered mixed batches, metadata safety, effective-source
+integrity, configurable page boundaries and `total_count`, `no_location`,
+per-component locale fallback, three-role location labels, and
+synthetic registered/represented-country fallbacks. Synthetic rows are
+inserted inside a transaction and rolled back.

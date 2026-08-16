@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="v1.2"
+VERSION="v1.3"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="${SCRIPT_DIR}/out"
@@ -13,8 +13,11 @@ RELEASE_ITEMS=(
   "configs"
   "generators"
   "maxmind-csv2sql-converter.sh"
+  "convert-csdmru.mysql.sh"
   "convert-default.mysql.sh"
   "convert-default.postgresql.sh"
+  "convert-skiddle.mysql.sh"
+  "convert-skiddle.postgresql.sh"
 )
 
 for item in "${RELEASE_ITEMS[@]}"; do

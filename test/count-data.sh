@@ -29,13 +29,6 @@ from pathlib import Path
 
 data_dir = Path(sys.argv[1])
 archive_args = sys.argv[2:]
-priority_fields = (
-    "geoname_id",
-    "registered_country_geoname_id",
-    "represented_country_geoname_id",
-)
-
-
 def resolve_archives():
     if archive_args:
         archives = []
@@ -93,14 +86,12 @@ def schema_from_prefix(prefix):
     return "maxmind_" + name.lower().replace("-", "_")
 
 
-def count_matching_blocks(archive, member, valid_geoname_ids):
-    count = 0
+def count_blocks(archive, member):
+    # Production network tables preserve source blocks even when every GeoName
+    # source ID is NULL; lookup routines expose those rows as no_location.
     handle, reader = csv_reader(archive, member)
     with handle:
-        for row in reader:
-            if any(row.get(field, "") in valid_geoname_ids for field in priority_fields):
-                count += 1
-    return count
+        return sum(1 for _ in reader)
 
 
 def count_archive(path):
@@ -117,7 +108,6 @@ def count_archive(path):
                     rows.append((f"{schema}.ipv{version}", sum(1 for _ in reader)))
             return rows
 
-        valid_geoname_ids = set()
         location_count = 0
 
         if kind in {"City", "Enterprise"}:
@@ -130,8 +120,6 @@ def count_archive(path):
         with handle:
             for row in reader:
                 geoname_id = row.get("geoname_id", "")
-                if geoname_id:
-                    valid_geoname_ids.add(geoname_id)
                 location_count += 1
 
                 if kind in {"City", "Enterprise"}:
@@ -170,7 +158,7 @@ def count_archive(path):
             rows.append(
                 (
                     f"{schema}.ipv{version}",
-                    count_matching_blocks(archive, blocks_member, valid_geoname_ids),
+                    count_blocks(archive, blocks_member),
                 )
             )
         if kind == "Enterprise":

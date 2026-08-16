@@ -1,13 +1,13 @@
-# https://github.com/mbto/maxmind-csv2sql-converter v1.2
+# https://github.com/mbto/maxmind-csv2sql-converter v1.3
 declare -g DBMS MYSQL_COMMAND MYSQL_HOST MYSQL_PORT MYSQL_USER MYSQL_PASSWORD MYSQL_EXTRA_ARGS MYSQL_ROUTINE_DEFINER
 declare -g POSTGRESQL_COMMAND POSTGRESQL_HOST POSTGRESQL_PORT POSTGRESQL_USER POSTGRESQL_DATABASE POSTGRESQL_PASSWORD POSTGRESQL_EXTRA_ARGS
+declare -g CONVERTER_VERSION SCHEMA_VERSION BUILD_RUN_ID
 : "${DBMS:?DBMS must be set before sourcing default generator functions}"
 
 declare -gA CONFIGURED_COLUMN_ENABLED_CACHE=()
 declare -gA COLUMN_ENABLED_CACHE=()
 declare -gA FINAL_TABLE_ENABLED_CACHE=()
 declare -gA BLOCK_TABLE_HAS_OUTPUT_COLUMN_CACHE=()
-declare -gA LOCATION_MIX_EXPR_CACHE=()
 declare -ga ROUTINE_SELECT_NAMES_CACHE=()
 declare -ga ROUTINE_SELECT_EXPRS_CACHE=()
 declare -ga ROUTINE_SELECT_TYPES_CACHE=()
@@ -94,6 +94,28 @@ any_configured_column_enabled() {
   return 1
 }
 
+geoname_role_columns() {
+  printf '%s\n' geoname_id registered_country_geoname_id represented_country_geoname_id
+}
+
+any_block_output_column_enabled() {
+  local column="$1"
+  local version
+  for version in "${IP_VERSIONS[@]}"; do
+    if column_enabled "ipv$version" "$column"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+enabled_geoname_role_columns() {
+  local column
+  while IFS= read -r column; do
+    any_block_output_column_enabled "$column" && printf '%s\n' "$column"
+  done < <(geoname_role_columns)
+}
+
 isp_table_enabled() {
   local col
   has_enterprise_isp || return 1
@@ -113,6 +135,9 @@ final_table_enabled() {
     return "${FINAL_TABLE_ENABLED_CACHE[$table]}"
   fi
   case "$table" in
+    dataset_metadata)
+      status=0
+      ;;
     timezone)
       if is_city_location && configured_column_enabled timezone name; then
         status=0
@@ -198,6 +223,25 @@ require_column_enabled() {
   fi
 }
 
+egeo_check_expr() {
+  local table="$1"
+  local e_col source_col role code branch
+  local branches=()
+  e_col="$(ident e_geoname_id)"
+  source_col="$(ident e_geoname_source_code)"
+  while IFS= read -r role; do
+    code="$(geoname_source_code "$role")"
+    branch="($source_col = $code"
+    if column_enabled "$table" "$role"; then
+      branch+=" AND $(ident "$role") IS NOT NULL AND $e_col = $(ident "$role")"
+    fi
+    branch+=")"
+    branches+=("$branch")
+  done < <(geoname_role_columns)
+  printf '((%s IS NULL AND %s IS NULL) OR (%s IS NOT NULL AND %s IS NOT NULL AND (%s)))' \
+    "$e_col" "$source_col" "$e_col" "$source_col" "$(join_sql_items ' OR ' "${branches[@]}")"
+}
+
 validate_column_config_section() {
   local table="$1"
   local allowed="$2"
@@ -262,7 +306,7 @@ validate_output_columns_config() {
   fi
   for version in "${IP_VERSIONS[@]}"; do
     table="ipv$version"
-    allowed="network,$ip_range_columns,v_geoname_id"
+    allowed="network,$ip_range_columns,e_geoname_id,e_geoname_source_code"
     while IFS= read -r col; do
       [[ -n "$col" && "$col" != "network" ]] && allowed="${allowed},$col"
     done < <(header_columns "$CSV_DIR/$CSV_PREFIX-Blocks-IPv$version.csv")
@@ -282,7 +326,8 @@ validate_output_columns_config() {
   for version in "${IP_VERSIONS[@]}"; do
     table="ipv$version"
     require_column_enabled "$table" network
-    require_column_enabled "$table" v_geoname_id
+    require_column_enabled "$table" e_geoname_id
+    require_column_enabled "$table" e_geoname_source_code
     require_column_enabled "$table" start_ip
     require_column_enabled "$table" last_ip
   done
@@ -445,7 +490,8 @@ mysql_type_block() {
   local col="$1"
   case "$col" in
     network) echo "VARCHAR(43) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL" ;;
-    v_geoname_id|geoname_id|registered_country_geoname_id|represented_country_geoname_id|accuracy_radius|autonomous_system_number|isp_id|anonymizer_confidence|ipv4_24|ipv4_32|ipv6_32|ipv6_48|ipv6_64) echo "INT UNSIGNED DEFAULT NULL" ;;
+    e_geoname_id|geoname_id|registered_country_geoname_id|represented_country_geoname_id|accuracy_radius|autonomous_system_number|isp_id|anonymizer_confidence|ipv4_24|ipv4_32|ipv6_32|ipv6_48|ipv6_64) echo "INT UNSIGNED DEFAULT NULL" ;;
+    e_geoname_source_code) echo "TINYINT UNSIGNED DEFAULT NULL" ;;
     is_anonymous_proxy|is_satellite_provider|is_anycast|is_anonymous|is_anonymous_vpn|is_hosting_provider|is_public_proxy|is_tor_exit_node|is_residential_proxy|is_legitimate_proxy) echo "TINYINT(1) UNSIGNED DEFAULT NULL" ;;
     postal_code) echo "VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL" ;;
     latitude) echo "DECIMAL(6,4) DEFAULT NULL" ;;
@@ -469,7 +515,8 @@ pg_type_block() {
   local col="$1"
   case "$col" in
     network) echo "text DEFAULT NULL" ;;
-    v_geoname_id|geoname_id|registered_country_geoname_id|represented_country_geoname_id|accuracy_radius|autonomous_system_number|isp_id|anonymizer_confidence|ipv4_24|ipv4_32|ipv6_32|ipv6_48|ipv6_64) echo "integer DEFAULT NULL" ;;
+    e_geoname_id|geoname_id|registered_country_geoname_id|represented_country_geoname_id|accuracy_radius|autonomous_system_number|isp_id|anonymizer_confidence|ipv4_24|ipv4_32|ipv6_32|ipv6_48|ipv6_64) echo "integer DEFAULT NULL" ;;
+    e_geoname_source_code) echo "smallint DEFAULT NULL" ;;
     is_anonymous_proxy|is_satellite_provider|is_anycast|is_anonymous|is_anonymous_vpn|is_hosting_provider|is_public_proxy|is_tor_exit_node|is_residential_proxy|is_legitimate_proxy) echo "boolean DEFAULT NULL" ;;
     postal_code) echo "varchar(16) DEFAULT NULL" ;;
     latitude) echo "numeric(6,4) DEFAULT NULL" ;;
@@ -625,6 +672,7 @@ helper_name() {
 }
 
 final_table_order() {
+  printf '%s\n' dataset_metadata
   if is_location_family; then
     if is_city_location; then
       final_table_enabled timezone && printf '%s\n' timezone
@@ -660,6 +708,46 @@ write_table_ddl() {
   q="$(ident "$(stage_name "$table")")"
   {
     case "$DBMS:$table" in
+      mysql:dataset_metadata)
+        lines=(
+          "  $(mysql_ident run_id) VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL"
+          "  $(mysql_ident edition_id) VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL"
+          "  $(mysql_ident archive_root) VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL"
+          "  $(mysql_ident source_build_date) DATE DEFAULT NULL"
+          "  $(mysql_ident imported_at) DATETIME(6) NOT NULL"
+          "  $(mysql_ident converter_version) VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL"
+          "  $(mysql_ident schema_version) INT UNSIGNED NOT NULL"
+          "  $(mysql_ident dbms) VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL"
+          "  $(mysql_ident project_name) VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL"
+          "  $(mysql_ident schema_name) VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL"
+          "  $(mysql_ident ip_versions) JSON NOT NULL"
+          "  $(mysql_ident selected_locales) JSON NOT NULL"
+          "  $(mysql_ident loaded_locales) JSON NOT NULL"
+          "  $(mysql_ident e_geoname_id_priority_columns) JSON NOT NULL"
+          "  PRIMARY KEY ($(mysql_ident run_id))"
+        )
+        emit_create_table_sql "$q" "${lines[@]}"
+        ;;
+      postgresql:dataset_metadata)
+        lines=(
+          "  $(pg_ident run_id) varchar(64) NOT NULL"
+          "  $(pg_ident edition_id) varchar(64) NOT NULL"
+          "  $(pg_ident archive_root) varchar(255) NOT NULL"
+          "  $(pg_ident source_build_date) date DEFAULT NULL"
+          "  $(pg_ident imported_at) timestamptz NOT NULL"
+          "  $(pg_ident converter_version) varchar(32) NOT NULL"
+          "  $(pg_ident schema_version) integer NOT NULL"
+          "  $(pg_ident dbms) varchar(16) NOT NULL"
+          "  $(pg_ident project_name) varchar(128) NOT NULL"
+          "  $(pg_ident schema_name) varchar(128) NOT NULL"
+          "  $(pg_ident ip_versions) jsonb NOT NULL"
+          "  $(pg_ident selected_locales) jsonb NOT NULL"
+          "  $(pg_ident loaded_locales) jsonb NOT NULL"
+          "  $(pg_ident e_geoname_id_priority_columns) jsonb NOT NULL"
+          "  PRIMARY KEY ($(pg_ident run_id))"
+        )
+        emit_create_table_sql "$q" "${lines[@]}"
+        ;;
       mysql:timezone)
         lines=()
         lines+=("  $(mysql_ident id) SMALLINT UNSIGNED NOT NULL")
@@ -792,8 +880,14 @@ write_table_ddl() {
         lines+=("  $(mysql_ident network) $(mysql_network_type_for_table "$table") NOT NULL")
         lines+=("  $(mysql_ident start_ip) $range_type NOT NULL")
         lines+=("  $(mysql_ident last_ip) $range_type NOT NULL")
-        is_location_family && lines+=("  $(mysql_ident v_geoname_id) INT UNSIGNED NOT NULL COMMENT 'One of valid geoname_id (from v_geoname_id_priority_columns .convert section)'")
+        if is_location_family; then
+          lines+=("  $(mysql_ident e_geoname_id) INT UNSIGNED DEFAULT NULL COMMENT 'Effective GeoName ID selected from configured priority columns; NULL when no configured source resolves; see e_geoname_source_code and dataset_metadata'")
+          lines+=("  $(mysql_ident e_geoname_source_code) TINYINT UNSIGNED DEFAULT NULL COMMENT 'Effective GeoName source: 1=geoname_id, 2=registered_country_geoname_id, 3=represented_country_geoname_id; NULL with e_geoname_id'")
+        fi
         append_block_header_columns lines "$table" network
+        if is_location_family; then
+          lines+=("  CONSTRAINT $(mysql_ident "ck_${RUN_ID}_${table}_egeo") CHECK ($(egeo_check_expr "$table"))")
+        fi
         lines+=("  PRIMARY KEY ($(mysql_ident network))")
         emit_create_table_sql "$q" "${lines[@]}"
         ;;
@@ -802,12 +896,19 @@ write_table_ddl() {
         lines+=("  $(pg_ident network) cidr NOT NULL")
         lines+=("  $(pg_ident start_ip) inet NOT NULL")
         lines+=("  $(pg_ident last_ip) inet NOT NULL")
-        is_location_family && lines+=("  $(pg_ident v_geoname_id) integer NOT NULL")
+        if is_location_family; then
+          lines+=("  $(pg_ident e_geoname_id) integer DEFAULT NULL")
+          lines+=("  $(pg_ident e_geoname_source_code) smallint DEFAULT NULL")
+        fi
         append_block_header_columns lines "$table" network
+        if is_location_family; then
+          lines+=("  CONSTRAINT $(pg_ident "ck_${RUN_ID}_${table}_egeo") CHECK ($(egeo_check_expr "$table"))")
+        fi
         lines+=("  PRIMARY KEY ($(pg_ident network))")
         emit_create_table_sql "$q" "${lines[@]}"
         if is_location_family; then
-          echo "COMMENT ON COLUMN $q.$(pg_ident v_geoname_id) IS 'One of valid geoname_id (from v_geoname_id_priority_columns .convert section)';"
+          echo "COMMENT ON COLUMN $q.$(pg_ident e_geoname_id) IS 'Effective GeoName ID selected from configured priority columns; NULL when no configured source resolves; see e_geoname_source_code and dataset_metadata';"
+          echo "COMMENT ON COLUMN $q.$(pg_ident e_geoname_source_code) IS 'Effective GeoName source: 1=geoname_id, 2=registered_country_geoname_id, 3=represented_country_geoname_id; NULL with e_geoname_id';"
         fi
         ;;
     esac
@@ -951,7 +1052,7 @@ ip_geo_fields_for_transform() {
   printf '%s\n' "${fields[@]}"
 }
 
-vgeo_case_expr() {
+egeo_case_expr() {
   local field alias
   printf "CASE\n"
   for field in "${PRIORITY_FIELDS[@]}"; do
@@ -965,6 +1066,35 @@ vgeo_case_expr() {
   for field in "${PRIORITY_FIELDS[@]}"; do
     alias="$(field_alias "$field")"
     printf "    WHEN %s.%s IS NOT NULL THEN b.%s\n" "$alias" "$(ident geoname_id)" "$(ident "$field")"
+  done
+  printf "    ELSE NULL\nEND"
+}
+
+geoname_source_code() {
+  case "$1" in
+    geoname_id) printf '1' ;;
+    registered_country_geoname_id) printf '2' ;;
+    represented_country_geoname_id) printf '3' ;;
+    *) die "Unsupported effective geoname source field: $1" ;;
+  esac
+}
+
+egeo_source_case_expr() {
+  local field alias source_code
+  printf "CASE\n"
+  for field in "${PRIORITY_FIELDS[@]}"; do
+    alias="$(field_alias "$field")"
+    source_code="$(geoname_source_code "$field")"
+    if [[ "$DBMS" == "mysql" ]]; then
+      printf "    WHEN %s.%s IS NOT NULL AND %s.%s = 1 THEN %s\n" "$alias" "$(ident geoname_id)" "$alias" "$(ident has_country_iso)" "$source_code"
+    else
+      printf "    WHEN %s.%s IS NOT NULL AND %s.%s IS TRUE THEN %s\n" "$alias" "$(ident geoname_id)" "$alias" "$(ident has_country_iso)" "$source_code"
+    fi
+  done
+  for field in "${PRIORITY_FIELDS[@]}"; do
+    alias="$(field_alias "$field")"
+    source_code="$(geoname_source_code "$field")"
+    printf "    WHEN %s.%s IS NOT NULL THEN %s\n" "$alias" "$(ident geoname_id)" "$source_code"
   done
   printf "    ELSE NULL\nEND"
 }
@@ -1409,11 +1539,11 @@ SQL
 write_ip_transform() {
   local file="$1"
   local version="$2"
-  local raw table prefix_bits start_expr last_expr pow_join candidate where_candidate cols selects cols_csv selects_sql field alias
+  local raw table prefix_bits start_expr last_expr pow_join candidate source_candidate cols selects cols_csv selects_sql field alias
   raw="$(raw_blocks_table "$version")"
   table="ipv$version"
-  candidate="$(vgeo_case_expr)"
-  where_candidate="$candidate IS NOT NULL"
+  candidate="$(egeo_case_expr)"
+  source_candidate="$(egeo_source_case_expr)"
   cols=(network)
   selects=()
 
@@ -1428,8 +1558,8 @@ write_ip_transform() {
     fi
     last_expr="$start_expr + p.$(ident value) - 1"
     selects=("b.$(ident network)")
-    cols+=(start_ip last_ip v_geoname_id)
-    selects+=("$start_expr" "$last_expr" "$candidate")
+    cols+=(start_ip last_ip e_geoname_id e_geoname_source_code)
+    selects+=("$start_expr" "$last_expr" "$candidate" "$source_candidate")
     append_column_select_if_enabled cols selects "$table" geoname_id geoname_id "$(normalized_geo_expr geoname_id)"
     append_column_select_if_enabled cols selects "$table" registered_country_geoname_id registered_country_geoname_id "$(normalized_geo_expr registered_country_geoname_id)"
     append_column_select_if_enabled cols selects "$table" represented_country_geoname_id represented_country_geoname_id "$(normalized_geo_expr represented_country_geoname_id)"
@@ -1440,8 +1570,8 @@ write_ip_transform() {
     last_expr="host(broadcast(b.$(ident network)::cidr))::inet"
     pow_join=""
     selects=("b.$(ident network)::cidr")
-    cols+=(start_ip last_ip v_geoname_id)
-    selects+=("$start_expr" "$last_expr" "$candidate")
+    cols+=(start_ip last_ip e_geoname_id e_geoname_source_code)
+    selects+=("$start_expr" "$last_expr" "$candidate" "$source_candidate")
     append_column_select_if_enabled cols selects "$table" geoname_id geoname_id "$(normalized_geo_expr geoname_id)"
     append_column_select_if_enabled cols selects "$table" registered_country_geoname_id registered_country_geoname_id "$(normalized_geo_expr registered_country_geoname_id)"
     append_column_select_if_enabled cols selects "$table" represented_country_geoname_id represented_country_geoname_id "$(normalized_geo_expr represented_country_geoname_id)"
@@ -1464,7 +1594,7 @@ SQL
   done < <(ip_geo_fields_for_transform "$table")
   cat >> "$file" <<SQL
 $pow_join
-WHERE $where_candidate;
+;
 
 SQL
 }
@@ -1538,6 +1668,81 @@ generate_pow2_values() {
   '
 }
 
+json_string_array_text() {
+  local first=true value
+  printf '['
+  for value in "$@"; do
+    if [[ "$first" == "true" ]]; then first=false; else printf ','; fi
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '"%s"' "$value"
+  done
+  printf ']'
+}
+
+json_number_array_text() {
+  local first=true value
+  printf '['
+  for value in "$@"; do
+    if [[ "$first" == "true" ]]; then first=false; else printf ','; fi
+    printf '%s' "$value"
+  done
+  printf ']'
+}
+
+metadata_json_expr() {
+  local json="$1"
+  if [[ "$DBMS" == "mysql" ]]; then
+    printf 'CAST(%s AS JSON)' "$(sql_literal "$json")"
+  else
+    printf '%s::jsonb' "$(sql_literal "$json")"
+  fi
+}
+
+write_dataset_metadata_transform() {
+  local file="$1"
+  local source_build_date="NULL" imported_at
+  local ip_versions_json selected_locales_json loaded_locales_json priority_json
+  local sorted_ip_versions=() sorted_selected_locales=() sorted_loaded_locales=()
+
+  mapfile -t sorted_ip_versions < <(printf '%s\n' "${IP_VERSIONS[@]}" | sort -n -u)
+  ip_versions_json="$(json_number_array_text "${sorted_ip_versions[@]}")"
+  if is_location_family; then
+    mapfile -t sorted_selected_locales < <(printf '%s\n' "${SELECTED_LOCALES[@]}" | sort -u)
+    mapfile -t sorted_loaded_locales < <(printf '%s\n' "${LOAD_LOCALES[@]}" | sort -u)
+    selected_locales_json="$(json_string_array_text "${sorted_selected_locales[@]}")"
+    loaded_locales_json="$(json_string_array_text "${sorted_loaded_locales[@]}")"
+    priority_json="$(json_string_array_text "${PRIORITY_FIELDS[@]}")"
+  else
+    selected_locales_json='[]'
+    loaded_locales_json='[]'
+    priority_json='[]'
+  fi
+  if [[ "$ARCHIVE_BUILD_DATE" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})$ ]]; then
+    source_build_date="$(sql_literal "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}")"
+  fi
+  if [[ "$DBMS" == "mysql" ]]; then
+    imported_at="UTC_TIMESTAMP(6)"
+  else
+    imported_at="CURRENT_TIMESTAMP"
+  fi
+
+  cat >> "$file" <<SQL
+INSERT INTO $(ident "$(stage_name dataset_metadata)") (
+  $(ident run_id), $(ident edition_id), $(ident archive_root), $(ident source_build_date),
+  $(ident imported_at), $(ident converter_version), $(ident schema_version), $(ident dbms),
+  $(ident project_name), $(ident schema_name), $(ident ip_versions), $(ident selected_locales),
+  $(ident loaded_locales), $(ident e_geoname_id_priority_columns)
+) VALUES (
+  $(sql_literal "$BUILD_RUN_ID"), $(sql_literal "$ARCHIVE_EDITION_ID"), $(sql_literal "$ARCHIVE_ROOT"), $source_build_date,
+  $imported_at, $(sql_literal "$CONVERTER_VERSION"), $SCHEMA_VERSION, $(sql_literal "$DBMS"),
+  $(sql_literal "$CONFIG_PROJECT_NAME"), $(sql_literal "$SCHEMA_NAME"), $(metadata_json_expr "$ip_versions_json"), $(metadata_json_expr "$selected_locales_json"),
+  $(metadata_json_expr "$loaded_locales_json"), $(metadata_json_expr "$priority_json")
+);
+
+SQL
+}
+
 write_20_transform_stage() {
   local file="$RUN_DIR/20_transform_stage.sql"
   local table locale version filter_table
@@ -1590,6 +1795,7 @@ SQL
     for version in "${IP_VERSIONS[@]}"; do
       write_generic_ip_transform "$file" "$version"
     done
+    write_dataset_metadata_transform "$file"
     mysql_commit_dml_transaction "$file"
     return
   fi
@@ -1641,6 +1847,7 @@ SQL
   for version in "${IP_VERSIONS[@]}"; do
     write_ip_transform "$file" "$version"
   done
+  write_dataset_metadata_transform "$file"
   mysql_commit_dml_transaction "$file"
 }
 
@@ -1743,23 +1950,23 @@ write_90_indexes_stage() {
           if [[ "$DBMS" == "mysql" ]]; then
             clauses=(
               "ADD KEY $(ident "ix_${RUN_ID}_${table}_range") ($(ident start_ip) DESC,$(ident last_ip))"
-              "ADD KEY $(ident "ix_${RUN_ID}_${table}_vgeo") ($(ident v_geoname_id))"
-              "ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_vgeo") FOREIGN KEY ($(ident v_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE CASCADE ON DELETE CASCADE"
+              "ADD KEY $(ident "ix_${RUN_ID}_${table}_egeo") ($(ident e_geoname_id))"
+              "ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_egeo") FOREIGN KEY ($(ident e_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE RESTRICT ON DELETE RESTRICT"
             )
             if column_enabled "$table" geoname_id; then
               clauses+=("ADD KEY $(ident "ix_${RUN_ID}_${table}_geo") ($(ident geoname_id))")
-              clauses+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_geo") FOREIGN KEY ($(ident geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE CASCADE ON DELETE CASCADE")
+              clauses+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_geo") FOREIGN KEY ($(ident geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE RESTRICT ON DELETE RESTRICT")
             fi
             if column_enabled "$table" registered_country_geoname_id; then
               clauses+=("ADD KEY $(ident "ix_${RUN_ID}_${table}_rgeo") ($(ident registered_country_geoname_id))")
               if [[ "$ARCHIVE_EDITION_KIND" == "Country" ]]; then
-                clauses+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_rgeo") FOREIGN KEY ($(ident registered_country_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE CASCADE ON DELETE CASCADE")
+                clauses+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_rgeo") FOREIGN KEY ($(ident registered_country_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE RESTRICT ON DELETE RESTRICT")
               fi
             fi
             if column_enabled "$table" represented_country_geoname_id; then
               clauses+=("ADD KEY $(ident "ix_${RUN_ID}_${table}_reprgeo") ($(ident represented_country_geoname_id))")
               if [[ "$ARCHIVE_EDITION_KIND" == "Country" ]]; then
-                clauses+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_reprgeo") FOREIGN KEY ($(ident represented_country_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE CASCADE ON DELETE CASCADE")
+                clauses+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_reprgeo") FOREIGN KEY ($(ident represented_country_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE RESTRICT ON DELETE RESTRICT")
               fi
             fi
             if final_table_enabled isp && column_enabled "$table" isp_id; then
@@ -1773,22 +1980,22 @@ write_90_indexes_stage() {
             } >> "$file"
           else
             echo "CREATE INDEX $(ident "ix_${RUN_ID}_${table}_range") ON $(ident "$(stage_name "$table")") ($(ident start_ip) DESC, $(ident last_ip));" >> "$file"
-            echo "CREATE INDEX $(ident "ix_${RUN_ID}_${table}_vgeo") ON $(ident "$(stage_name "$table")") ($(ident v_geoname_id));" >> "$file"
-            constraints=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_vgeo") FOREIGN KEY ($(ident v_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE CASCADE ON DELETE CASCADE")
+            echo "CREATE INDEX $(ident "ix_${RUN_ID}_${table}_egeo") ON $(ident "$(stage_name "$table")") ($(ident e_geoname_id));" >> "$file"
+            constraints=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_egeo") FOREIGN KEY ($(ident e_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE RESTRICT ON DELETE RESTRICT")
             if column_enabled "$table" geoname_id; then
               echo "CREATE INDEX $(ident "ix_${RUN_ID}_${table}_geo") ON $(ident "$(stage_name "$table")") ($(ident geoname_id));" >> "$file"
-              constraints+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_geo") FOREIGN KEY ($(ident geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE CASCADE ON DELETE CASCADE")
+              constraints+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_geo") FOREIGN KEY ($(ident geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE RESTRICT ON DELETE RESTRICT")
             fi
             if column_enabled "$table" registered_country_geoname_id; then
               echo "CREATE INDEX $(ident "ix_${RUN_ID}_${table}_rgeo") ON $(ident "$(stage_name "$table")") ($(ident registered_country_geoname_id));" >> "$file"
               if [[ "$ARCHIVE_EDITION_KIND" == "Country" ]]; then
-                constraints+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_rgeo") FOREIGN KEY ($(ident registered_country_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE CASCADE ON DELETE CASCADE")
+                constraints+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_rgeo") FOREIGN KEY ($(ident registered_country_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE RESTRICT ON DELETE RESTRICT")
               fi
             fi
             if column_enabled "$table" represented_country_geoname_id; then
               echo "CREATE INDEX $(ident "ix_${RUN_ID}_${table}_reprgeo") ON $(ident "$(stage_name "$table")") ($(ident represented_country_geoname_id));" >> "$file"
               if [[ "$ARCHIVE_EDITION_KIND" == "Country" ]]; then
-                constraints+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_reprgeo") FOREIGN KEY ($(ident represented_country_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE CASCADE ON DELETE CASCADE")
+                constraints+=("ADD CONSTRAINT $(ident "fk_${RUN_ID}_${table}_reprgeo") FOREIGN KEY ($(ident represented_country_geoname_id)) REFERENCES $(ident "$(stage_name "$ref")") ($(ident geoname_id)) ON UPDATE RESTRICT ON DELETE RESTRICT")
               fi
             fi
             if final_table_enabled isp && column_enabled "$table" isp_id; then
@@ -1828,7 +2035,8 @@ mysql_promote_add_fk_sql() {
   local column="$4"
   local ref_table="$5"
   local ref_column="$6"
-  echo "ALTER TABLE $(mysql_ident "$table") ADD CONSTRAINT $(mysql_ident "fk_${suffix}") FOREIGN KEY ($(mysql_ident "$column")) REFERENCES $(mysql_ident "$ref_table") ($(mysql_ident "$ref_column")) ON UPDATE CASCADE ON DELETE CASCADE;" >> "$file"
+  local actions="${7:-ON UPDATE CASCADE ON DELETE CASCADE}"
+  echo "ALTER TABLE $(mysql_ident "$table") ADD CONSTRAINT $(mysql_ident "fk_${suffix}") FOREIGN KEY ($(mysql_ident "$column")) REFERENCES $(mysql_ident "$ref_table") ($(mysql_ident "$ref_column")) $actions;" >> "$file"
 }
 
 mysql_promote_fk_specs() {
@@ -1872,29 +2080,29 @@ mysql_promote_fk_specs() {
   for table in ipv4 ipv6; do
     array_contains "${table#ipv}" "${IP_VERSIONS[@]}" || continue
     if [[ "$action" == "drop" ]]; then
-      mysql_promote_drop_fk_sql "$file" "$table" "${table}_vgeo"
+      mysql_promote_drop_fk_sql "$file" "$table" "${table}_egeo"
     else
-      mysql_promote_add_fk_sql "$file" "$table" "${table}_vgeo" v_geoname_id "$ref" geoname_id
+      mysql_promote_add_fk_sql "$file" "$table" "${table}_egeo" e_geoname_id "$ref" geoname_id "ON UPDATE RESTRICT ON DELETE RESTRICT"
     fi
     if column_enabled "$table" geoname_id; then
       if [[ "$action" == "drop" ]]; then
         mysql_promote_drop_fk_sql "$file" "$table" "${table}_geo"
       else
-        mysql_promote_add_fk_sql "$file" "$table" "${table}_geo" geoname_id "$ref" geoname_id
+        mysql_promote_add_fk_sql "$file" "$table" "${table}_geo" geoname_id "$ref" geoname_id "ON UPDATE RESTRICT ON DELETE RESTRICT"
       fi
     fi
     if [[ "$ARCHIVE_EDITION_KIND" == "Country" ]] && column_enabled "$table" registered_country_geoname_id; then
       if [[ "$action" == "drop" ]]; then
         mysql_promote_drop_fk_sql "$file" "$table" "${table}_rgeo"
       else
-        mysql_promote_add_fk_sql "$file" "$table" "${table}_rgeo" registered_country_geoname_id "$ref" geoname_id
+        mysql_promote_add_fk_sql "$file" "$table" "${table}_rgeo" registered_country_geoname_id "$ref" geoname_id "ON UPDATE RESTRICT ON DELETE RESTRICT"
       fi
     fi
     if [[ "$ARCHIVE_EDITION_KIND" == "Country" ]] && column_enabled "$table" represented_country_geoname_id; then
       if [[ "$action" == "drop" ]]; then
         mysql_promote_drop_fk_sql "$file" "$table" "${table}_reprgeo"
       else
-        mysql_promote_add_fk_sql "$file" "$table" "${table}_reprgeo" represented_country_geoname_id "$ref" geoname_id
+        mysql_promote_add_fk_sql "$file" "$table" "${table}_reprgeo" represented_country_geoname_id "$ref" geoname_id "ON UPDATE RESTRICT ON DELETE RESTRICT"
       fi
     fi
     if final_table_enabled isp && column_enabled "$table" isp_id; then
@@ -1942,7 +2150,7 @@ mysql_promote_rename_indexes() {
     array_contains "${table#ipv}" "${IP_VERSIONS[@]}" || continue
     mysql_promote_rename_index_sql "$file" "$table" "${table}_range"
     is_location_family || continue
-    mysql_promote_rename_index_sql "$file" "$table" "${table}_vgeo"
+    mysql_promote_rename_index_sql "$file" "$table" "${table}_egeo"
     if column_enabled "$table" geoname_id; then
       mysql_promote_rename_index_sql "$file" "$table" "${table}_geo"
     fi
@@ -2069,34 +2277,9 @@ locale_text_expr() {
   local table="$2"
   local base="$3"
   local locale="$4"
-  local mix="$5"
-  if [[ "$mix" == "true" ]]; then
-    mix_locale_expr "$alias" "$table" "$base"
-  elif column_enabled "$table" "${base}_$locale"; then
+  if column_enabled "$table" "${base}_$locale"; then
     printf '%s.%s' "$alias" "$(ident "${base}_$locale")"
   fi
-}
-
-mix_locale_expr() {
-  local alias="$1"
-  local table="$2"
-  local base="$3"
-  local locale exprs=()
-  for preferred in ru en; do
-    if array_contains "$preferred" "${SELECTED_LOCALES[@]}" && column_enabled "$table" "${base}_$preferred"; then
-      exprs+=("$alias.$(ident "${base}_$preferred")")
-    fi
-  done
-  for locale in "${SELECTED_LOCALES[@]}"; do
-    [[ "$locale" == "ru" || "$locale" == "en" ]] && continue
-    if column_enabled "$table" "${base}_$locale"; then
-      exprs+=("$alias.$(ident "${base}_$locale")")
-    fi
-  done
-  [[ "${#exprs[@]}" -gt 0 ]] || return 0
-  printf 'COALESCE('
-  join_sql_items ", " "${exprs[@]}"
-  printf ')'
 }
 
 dedup_expr() {
@@ -2135,115 +2318,114 @@ concat_ws_expr() {
   printf ")"
 }
 
-country_mix_label_expr() {
-  local mode="$1"
-  local c_name="$2"
-  local c_iso="" c_emoji="" iso_box="" label=""
-  case "$mode" in
-    emoji)
-      if [[ -n "$c_name" ]] && column_enabled country emoji; then
-        c_emoji="c.$(ident emoji)"
-        label="$(concat_ws_expr "' '" "NULLIF($c_emoji, '')" "$c_name")"
-        printf "CASE WHEN append_emoji = 1 THEN %s ELSE %s END" "$label" "$c_name"
-      elif column_enabled country emoji; then
-        c_emoji="c.$(ident emoji)"
-        printf "CASE WHEN append_emoji = 1 THEN NULLIF(%s, '') ELSE NULL END" "$c_emoji"
-      elif [[ -n "$c_name" ]]; then
-        printf '%s' "$c_name"
-      fi
-      ;;
-    iso)
-      if column_enabled country iso_code; then
-        c_iso="c.$(ident iso_code)"
-        iso_box="$(concat_expr "'['" "$c_iso" "']'")"
-        if [[ -n "$c_name" ]]; then
-          label="$(concat_ws_expr "' '" "$iso_box" "$c_name")"
-          printf "CASE WHEN NULLIF(%s, '') IS NULL THEN %s ELSE %s END" "$c_iso" "$c_name" "$label"
-        else
-          printf "CASE WHEN NULLIF(%s, '') IS NULL THEN NULL ELSE %s END" "$c_iso" "$iso_box"
-        fi
-      elif [[ -n "$c_name" ]]; then
-        printf '%s' "$c_name"
-      fi
-      ;;
-    *)
-      die "Unsupported country mix label mode: $mode"
-      ;;
-  esac
-}
-
-city_location_mix_expr() {
-  local country_mode="$1"
-  local c_cont="" c_name="" c_label="" sd1="" sd2="" ci="" parts=() compares=()
-
-  if column_enabled city country_id; then
-    c_cont="$(mix_locale_expr c country continent_name)"
-    c_name="$(mix_locale_expr c country name)"
-    c_label="$(country_mix_label_expr "$country_mode" "$c_name")"
-  fi
-  [[ -n "$c_cont" ]] && parts+=("$c_cont")
-  [[ -n "$c_label" ]] && parts+=("$c_label")
-
-  if column_enabled city subdivision1_id; then
-    sd1="$(mix_locale_expr sd1 subdivision1 name)"
-  fi
-  if column_enabled city subdivision2_id; then
-    sd2="$(mix_locale_expr sd2 subdivision2 name)"
-  fi
-  ci="$(mix_locale_expr ci city name)"
-
-  if [[ -n "$sd1" ]]; then
-    compares=()
-    [[ -n "$c_name" ]] && compares+=("$c_name")
-    [[ -n "$ci" ]] && compares+=("$ci")
-    parts+=("$(dedup_expr "$sd1" "${compares[@]}")")
-  fi
-  if [[ -n "$sd2" ]]; then
-    compares=()
-    [[ -n "$c_name" ]] && compares+=("$c_name")
-    [[ -n "$ci" ]] && compares+=("$ci")
-    [[ -n "$sd1" ]] && compares+=("$sd1")
-    parts+=("$(dedup_expr "$sd2" "${compares[@]}")")
-  fi
-  if [[ -n "$ci" ]]; then
-    compares=()
-    [[ -n "$c_name" ]] && compares+=("$c_name")
-    parts+=("$(dedup_expr "$ci" "${compares[@]}")")
-  fi
-
-  [[ "${#parts[@]}" -gt 0 ]] || return 0
-  concat_ws_expr "' - '" "${parts[@]}"
-}
-
-country_location_mix_expr() {
-  local country_mode="$1"
-  local c_cont="" c_name="" c_label="" parts=()
-
-  c_cont="$(mix_locale_expr c country continent_name)"
-  c_name="$(mix_locale_expr c country name)"
-  c_label="$(country_mix_label_expr "$country_mode" "$c_name")"
-
-  [[ -n "$c_cont" ]] && parts+=("$c_cont")
-  [[ -n "$c_label" ]] && parts+=("$c_label")
-
-  [[ "${#parts[@]}" -gt 0 ]] || return 0
-  concat_ws_expr "' - '" "${parts[@]}"
-}
-
-build_location_mix_expr() {
-  local country_mode="$1"
-  local expr
-  if [[ -v 'LOCATION_MIX_EXPR_CACHE[$country_mode]' ]]; then
-    [[ -n "${LOCATION_MIX_EXPR_CACHE[$country_mode]}" ]] && printf '%s' "${LOCATION_MIX_EXPR_CACHE[$country_mode]}"
-    return
-  fi
-  if is_city_location; then
-    expr="$(city_location_mix_expr "$country_mode")"
+coalesce_expr() {
+  local exprs=("$@")
+  if [[ "${#exprs[@]}" -eq 0 ]]; then
+    return 0
+  elif [[ "${#exprs[@]}" -eq 1 ]]; then
+    printf '%s' "${exprs[0]}"
   else
-    expr="$(country_location_mix_expr "$country_mode")"
+    printf 'COALESCE('
+    join_sql_items ", " "${exprs[@]}"
+    printf ')'
   fi
-  LOCATION_MIX_EXPR_CACHE[$country_mode]="$expr"
-  [[ -n "$expr" ]] && printf '%s' "$expr"
+}
+
+preferred_locale_text_expr() {
+  local alias="$1"
+  local table="$2"
+  local base="$3"
+  local locale_sql="$4"
+  local locale normalized available=() fallback=() branch=() field
+
+  for locale in "${SELECTED_LOCALES[@]}"; do
+    if column_enabled "$table" "${base}_$locale"; then
+      available+=("$locale")
+    fi
+  done
+  [[ "${#available[@]}" -gt 0 ]] || return 0
+
+  if array_contains en "${available[@]}"; then
+    fallback+=("$alias.$(ident "${base}_en")")
+  fi
+  for locale in "${available[@]}"; do
+    [[ "$locale" == "en" ]] && continue
+    fallback+=("$alias.$(ident "${base}_$locale")")
+  done
+
+  # Accept both a plain SQL locale ('ru') and an accidentally JSON-encoded
+  # locale ('"ru"'). Fallback remains component-by-component.
+  normalized="LOWER(REPLACE(TRIM(BOTH '\"' FROM TRIM(COALESCE($locale_sql, ''))), '_', '-'))"
+  printf 'CASE %s ' "$normalized"
+  for locale in "${available[@]}"; do
+    branch=("$alias.$(ident "${base}_$locale")")
+    for field in "${fallback[@]}"; do
+      [[ "$field" == "${branch[0]}" ]] || branch+=("$field")
+    done
+    printf 'WHEN %s THEN %s ' "$(sql_literal "${locale,,}")" "$(coalesce_expr "${branch[@]}")"
+  done
+  printf 'ELSE %s END' "$(coalesce_expr "${fallback[@]}")"
+}
+
+location_label_expr() {
+  local locale_sql="$1"
+  local include_continent_sql="$2"
+  local include_iso_sql="$3"
+  local include_emoji_sql="$4"
+  local c_cont="" c_name="" c_label="" c_iso="" c_emoji="" sd1="" sd2="" ci=""
+  local parts=() country_parts=() compares=()
+
+  if [[ "${ARCHIVE_LOCATION_KIND,,}" == "country" ]] || column_enabled city country_id; then
+    c_cont="$(preferred_locale_text_expr c country continent_name "$locale_sql")"
+    c_name="$(preferred_locale_text_expr c country name "$locale_sql")"
+    if column_enabled country emoji; then
+      c_emoji="CASE WHEN $include_emoji_sql = 1 THEN NULLIF(c.$(ident emoji), '') ELSE NULL END"
+      country_parts+=("$c_emoji")
+    fi
+    if column_enabled country iso_code; then
+      c_iso="CASE WHEN $include_iso_sql = 1 AND NULLIF(c.$(ident iso_code), '') IS NOT NULL THEN $(concat_expr "'['" "c.$(ident iso_code)" "']'") ELSE NULL END"
+      country_parts+=("$c_iso")
+    fi
+    [[ -n "$c_name" ]] && country_parts+=("$c_name")
+    if [[ "${#country_parts[@]}" -gt 0 ]]; then
+      c_label="$(concat_ws_expr "' '" "${country_parts[@]}")"
+    fi
+  fi
+
+  [[ -n "$c_cont" ]] && parts+=("CASE WHEN $include_continent_sql = 1 THEN $c_cont ELSE NULL END")
+  [[ -n "$c_label" ]] && parts+=("NULLIF($c_label, '')")
+
+  if is_city_location; then
+    if column_enabled city subdivision1_id; then
+      sd1="$(preferred_locale_text_expr sd1 subdivision1 name "$locale_sql")"
+    fi
+    if column_enabled city subdivision2_id; then
+      sd2="$(preferred_locale_text_expr sd2 subdivision2 name "$locale_sql")"
+    fi
+    ci="$(preferred_locale_text_expr ci city name "$locale_sql")"
+
+    if [[ -n "$sd1" ]]; then
+      compares=()
+      [[ -n "$c_name" ]] && compares+=("$c_name")
+      [[ -n "$ci" ]] && compares+=("$ci")
+      parts+=("$(dedup_expr "$sd1" "${compares[@]}")")
+    fi
+    if [[ -n "$sd2" ]]; then
+      compares=()
+      [[ -n "$c_name" ]] && compares+=("$c_name")
+      [[ -n "$ci" ]] && compares+=("$ci")
+      [[ -n "$sd1" ]] && compares+=("$sd1")
+      parts+=("$(dedup_expr "$sd2" "${compares[@]}")")
+    fi
+    if [[ -n "$ci" ]]; then
+      compares=()
+      [[ -n "$c_name" ]] && compares+=("$c_name")
+      parts+=("$(dedup_expr "$ci" "${compares[@]}")")
+    fi
+  fi
+
+  [[ "${#parts[@]}" -gt 0 ]] || return 0
+  concat_ws_expr "' - '" "${parts[@]}"
 }
 
 write_city_lookup_from_sql() {
@@ -2298,55 +2480,6 @@ write_geoname_lookup_from_input_sql() {
   fi
 }
 
-location_expr() {
-  local kind="$1"
-  local locale="$2"
-  local mix="$3"
-  local fn c_cont="" c_name="" sd1="" sd2="" ci="" parts=() compares=()
-  [[ "$DBMS" == "mysql" ]] && fn="CONCAT_WS" || fn="concat_ws"
-
-  if [[ "$kind" == "country" ]] || { [[ "$kind" == "city" ]] && column_enabled city country_id; }; then
-    c_cont="$(locale_text_expr c country continent_name "$locale" "$mix")"
-    c_name="$(locale_text_expr c country name "$locale" "$mix")"
-  fi
-  [[ -n "$c_cont" ]] && parts+=("$c_cont")
-  [[ -n "$c_name" ]] && parts+=("$c_name")
-
-  if [[ "$kind" == "city" ]]; then
-    if column_enabled city subdivision1_id; then
-      sd1="$(locale_text_expr sd1 subdivision1 name "$locale" "$mix")"
-    fi
-    if column_enabled city subdivision2_id; then
-      sd2="$(locale_text_expr sd2 subdivision2 name "$locale" "$mix")"
-    fi
-    ci="$(locale_text_expr ci city name "$locale" "$mix")"
-
-    if [[ -n "$sd1" ]]; then
-      compares=()
-      [[ -n "$c_name" ]] && compares+=("$c_name")
-      [[ -n "$ci" ]] && compares+=("$ci")
-      parts+=("$(dedup_expr "$sd1" "${compares[@]}")")
-    fi
-    if [[ -n "$sd2" ]]; then
-      compares=()
-      [[ -n "$c_name" ]] && compares+=("$c_name")
-      [[ -n "$ci" ]] && compares+=("$ci")
-      [[ -n "$sd1" ]] && compares+=("$sd1")
-      parts+=("$(dedup_expr "$sd2" "${compares[@]}")")
-    fi
-    if [[ -n "$ci" ]]; then
-      compares=()
-      [[ -n "$c_name" ]] && compares+=("$c_name")
-      parts+=("$(dedup_expr "$ci" "${compares[@]}")")
-    fi
-  fi
-
-  [[ "${#parts[@]}" -gt 0 ]] || return 0
-  printf "%s(' - ', " "$fn"
-  join_sql_items ", " "${parts[@]}"
-  printf ")"
-}
-
 routine_select_parts() {
   local -n names_ref="$1"
   local -n exprs_ref="$2"
@@ -2370,19 +2503,13 @@ routine_select_parts() {
     fi
   fi
   for locale in "${SELECTED_LOCALES[@]}"; do
-    expr="$(location_expr "$kind" "$locale" false)"
+    expr="$(location_label_expr "$(sql_literal "$locale")" include_continent include_iso_code include_emoji)"
     if [[ -n "$expr" ]]; then
       names_ref+=("location_$(locale_alias "$locale")")
       exprs_ref+=("$expr")
       types_ref+=("text")
     fi
   done
-  expr="$(location_expr "$kind" "" true)"
-  if [[ -n "$expr" ]]; then
-    names_ref+=(location_mix)
-    exprs_ref+=("$expr")
-    types_ref+=("text")
-  fi
   ROUTINE_SELECT_NAMES_CACHE=("${names_ref[@]}")
   ROUTINE_SELECT_EXPRS_CACHE=("${exprs_ref[@]}")
   ROUTINE_SELECT_TYPES_CACHE=("${types_ref[@]}")
@@ -2426,25 +2553,14 @@ write_mysql_build_location_functions() {
   local file="$1"
   local definer="$2"
   local expr
-
-  expr="$(build_location_mix_expr emoji)"
+  echo "DROP FUNCTION IF EXISTS $(mysql_ident build_location_label)\$\$" >> "$file"
+  expr="$(location_label_expr locale_param include_continent include_iso_code include_emoji)"
   if [[ -n "$expr" ]]; then
-    write_mysql_build_location_function "$file" "$definer" build_location_mix "geoname_id_param INT UNSIGNED, append_emoji INT UNSIGNED" "$expr"
+    write_mysql_build_location_function "$file" "$definer" build_location_label_by_geoname_id "geoname_id_param INT UNSIGNED, locale_param VARCHAR(16), include_continent INT UNSIGNED, include_iso_code INT UNSIGNED, include_emoji INT UNSIGNED" "$expr"
   else
     cat >> "$file" <<SQL
-DROP FUNCTION IF EXISTS $(mysql_ident build_location_mix)\$\$
--- build_location_mix was not generated because no configured output columns can be returned.
-
-SQL
-  fi
-
-  expr="$(build_location_mix_expr iso)"
-  if [[ -n "$expr" ]]; then
-    write_mysql_build_location_function "$file" "$definer" build_location_mix_with_iso_code "geoname_id_param INT UNSIGNED" "$expr"
-  else
-    cat >> "$file" <<SQL
-DROP FUNCTION IF EXISTS $(mysql_ident build_location_mix_with_iso_code)\$\$
--- build_location_mix_with_iso_code was not generated because no configured output columns can be returned.
+DROP FUNCTION IF EXISTS $(mysql_ident build_location_label_by_geoname_id)\$\$
+-- build_location_label_by_geoname_id was not generated because no configured output columns can be returned.
 
 SQL
   fi
@@ -2486,27 +2602,15 @@ SQL
 write_pg_build_location_functions() {
   local file="$1"
   local expr
-
-  expr="$(build_location_mix_expr emoji)"
+  echo "DROP FUNCTION IF EXISTS $(pg_ident build_location_label)(integer, text, integer, integer, integer);" >> "$file"
+  expr="$(location_label_expr locale_param include_continent include_iso_code include_emoji)"
   if [[ -n "$expr" ]]; then
-    write_pg_build_location_function "$file" build_location_mix "integer, integer" "geoname_id_param integer, append_emoji integer" "$expr"
+    write_pg_build_location_function "$file" build_location_label_by_geoname_id "integer, text, integer, integer, integer" "geoname_id_param integer, locale_param text, include_continent integer, include_iso_code integer, include_emoji integer" "$expr"
   else
     cat >> "$file" <<SQL
-DROP FUNCTION IF EXISTS $(pg_ident build_location_mix)(integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_label_by_geoname_id)(integer, text, integer, integer, integer);
 
--- build_location_mix was not generated because no configured output columns can be returned.
-
-SQL
-  fi
-
-  expr="$(build_location_mix_expr iso)"
-  if [[ -n "$expr" ]]; then
-    write_pg_build_location_function "$file" build_location_mix_with_iso_code "integer" "geoname_id_param integer" "$expr"
-  else
-    cat >> "$file" <<SQL
-DROP FUNCTION IF EXISTS $(pg_ident build_location_mix_with_iso_code)(integer);
-
--- build_location_mix_with_iso_code was not generated because no configured output columns can be returned.
+-- build_location_label_by_geoname_id was not generated because no configured output columns can be returned.
 
 SQL
   fi
@@ -2534,8 +2638,8 @@ network_lookup_table_columns() {
   local table="$1"
   local columns=(network)
   local col
-  if is_location_family && column_enabled "$table" v_geoname_id; then
-    columns+=(v_geoname_id)
+  if is_location_family && column_enabled "$table" e_geoname_id; then
+    columns+=(e_geoname_id e_geoname_source_code)
   fi
   while IFS= read -r col; do
     [[ -n "$col" && "$col" != "network" ]] || continue
@@ -2581,7 +2685,7 @@ block_table_has_output_column() {
     BLOCK_TABLE_HAS_OUTPUT_COLUMN_CACHE[$cache_key]="$status"
     return "$status"
   fi
-  if [[ "$wanted" == "v_geoname_id" ]]; then
+  if [[ "$wanted" == "e_geoname_id" || "$wanted" == "e_geoname_source_code" ]]; then
     if is_location_family && column_enabled "$table" "$wanted"; then status=0; fi
     BLOCK_TABLE_HAS_OUTPUT_COLUMN_CACHE[$cache_key]="$status"
     return "$status"
@@ -2649,11 +2753,23 @@ mysql_network_lookup_empty_select_sql() {
   join_sql_items ", " "${selects[@]}"
 }
 
+pg_network_lookup_null_selects_sql() {
+  local cols=("$@")
+  local selects=()
+  local col
+  for col in "${cols[@]}"; do
+    selects+=("NULL::$(pg_network_lookup_type "$col") AS $(pg_ident "$col")")
+  done
+  join_sql_items ", " "${selects[@]}"
+}
+
 mysql_network_lookup_temp_columns_sql() {
   local cols=("$@")
   local lines=(
     "        $(mysql_ident ord) INT UNSIGNED NOT NULL"
     "        $(mysql_ident ip) VARCHAR(45) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL"
+    "        $(mysql_ident status) VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL"
+    "        $(mysql_ident ip_version) TINYINT UNSIGNED DEFAULT NULL"
   )
   local col
   for col in "${cols[@]}"; do
@@ -2690,21 +2806,25 @@ write_mysql_network_lookup_branch() {
   local file="$1"
   local table="$2"
   local value_expr="$3"
-  shift 3
+  local ip_version="$4"
+  shift 4
   local cols=("$@")
   local inner_selects outer_selects
   inner_selects="$(network_lookup_inner_selects_sql "$table" "${cols[@]}")"
   outer_selects="$(network_lookup_outer_selects_sql "${cols[@]}")"
   cat >> "$file" <<SQL
-            SELECT $outer_selects
-            FROM (
+            SELECT CASE WHEN candidate.$(ident network) IS NULL THEN 'not_found' ELSE 'ok' END AS $(ident status),
+                   ip AS $(ident ip),
+                   $ip_version AS $(ident ip_version),
+                   $outer_selects
+            FROM (SELECT 1 AS $(ident seed)) AS seed
+            LEFT JOIN (
                 SELECT $inner_selects
                 FROM $(ident "$table") b
                 WHERE b.$(ident start_ip) <= $value_expr
                 ORDER BY b.$(ident start_ip) DESC
                 LIMIT 1
-            ) AS candidate
-            WHERE candidate.$(ident __last_ip) >= $value_expr;
+            ) AS candidate ON candidate.$(ident __last_ip) >= $value_expr;
 SQL
 }
 
@@ -2713,18 +2833,10 @@ write_mysql_network_lookup_procedure() {
   local definer="$2"
   local has4="$3"
   local has6="$4"
-  local cols4=() cols6=() fallback_cols=()
-  local empty_select4="" empty_select6="" fallback_empty_select
-  if [[ "$has4" == "true" ]]; then
-    mapfile -t cols4 < <(network_lookup_table_columns ipv4)
-    empty_select4="$(mysql_network_lookup_empty_select_sql "${cols4[@]}")"
-  fi
-  if [[ "$has6" == "true" ]]; then
-    mapfile -t cols6 < <(network_lookup_table_columns ipv6)
-    empty_select6="$(mysql_network_lookup_empty_select_sql "${cols6[@]}")"
-  fi
-  mapfile -t fallback_cols < <(network_lookup_columns)
-  fallback_empty_select="$(mysql_network_lookup_empty_select_sql "${fallback_cols[@]}")"
+  local cols=()
+  local empty_select
+  mapfile -t cols < <(network_lookup_columns)
+  empty_select="$(mysql_network_lookup_empty_select_sql "${cols[@]}")"
   cat >> "$file" <<SQL
 DELIMITER \$\$
 DROP PROCEDURE IF EXISTS $(mysql_ident find_network_by_ip)\$\$
@@ -2735,44 +2847,34 @@ SQL
   [[ "$has6" == "true" ]] && echo "    DECLARE ip6 DECIMAL(39,0) DEFAULT NULL;" >> "$file"
   [[ "$has4" == "true" ]] && echo "    DECLARE ip4 INT UNSIGNED DEFAULT NULL;" >> "$file"
   cat >> "$file" <<SQL
-    IF INSTR(ip, ':') > 0 THEN
+    IF IS_IPV6(ip) = 1 THEN
 SQL
   if [[ "$has6" == "true" ]]; then
     cat >> "$file" <<SQL
         SET ip6 = $(mysql_ident inet6_aton_decimal)(ip);
-        IF ip6 IS NULL THEN
-            SELECT $empty_select6 WHERE FALSE;
-        ELSE
 SQL
-    write_mysql_network_lookup_branch "$file" ipv6 ip6 "${cols6[@]}"
-    cat >> "$file" <<SQL
-        END IF;
-SQL
+    write_mysql_network_lookup_branch "$file" ipv6 ip6 6 "${cols[@]}"
   else
     cat >> "$file" <<SQL
-        SELECT $fallback_empty_select WHERE FALSE;
+        SELECT 'not_found' AS $(ident status), ip AS $(ident ip), 6 AS $(ident ip_version), $empty_select;
 SQL
   fi
   cat >> "$file" <<SQL
-    ELSE
+    ELSEIF IS_IPV4(ip) = 1 THEN
 SQL
   if [[ "$has4" == "true" ]]; then
     cat >> "$file" <<SQL
         SET ip4 = INET_ATON(ip);
-        IF ip4 IS NULL THEN
-            SELECT $empty_select4 WHERE FALSE;
-        ELSE
 SQL
-    write_mysql_network_lookup_branch "$file" ipv4 ip4 "${cols4[@]}"
-    cat >> "$file" <<SQL
-        END IF;
-SQL
+    write_mysql_network_lookup_branch "$file" ipv4 ip4 4 "${cols[@]}"
   else
     cat >> "$file" <<SQL
-        SELECT $fallback_empty_select WHERE FALSE;
+        SELECT 'not_found' AS $(ident status), ip AS $(ident ip), 4 AS $(ident ip_version), $empty_select;
 SQL
   fi
   cat >> "$file" <<SQL
+    ELSE
+        SELECT 'invalid_ip' AS $(ident status), ip AS $(ident ip), NULL AS $(ident ip_version), $empty_select;
     END IF;
 END\$\$
 DELIMITER ;
@@ -2806,14 +2908,41 @@ write_pg_network_lookup_branch() {
 SQL
 }
 
+write_pg_network_status_lookup_branch() {
+  local file="$1"
+  local table="$2"
+  local family="$3"
+  shift 3
+  local cols=("$@")
+  local inner_selects outer_selects
+  inner_selects="$(network_lookup_inner_selects_sql "$table" "${cols[@]}")"
+  outer_selects="$(network_lookup_outer_selects_sql "${cols[@]}")"
+  cat >> "$file" <<SQL
+        RETURN QUERY
+        SELECT 'ok'::text, p_ip, $family, $outer_selects
+        FROM (
+            SELECT $inner_selects
+            FROM $(ident "$table") b
+            WHERE b.$(ident start_ip) <= v_ip
+            ORDER BY b.$(ident start_ip) DESC
+            LIMIT 1
+        ) AS candidate
+        WHERE candidate.$(ident __last_ip) >= v_ip;
+        IF FOUND THEN
+            RETURN;
+        END IF;
+SQL
+}
+
 write_pg_network_lookup_function() {
   local file="$1"
   local has4="$2"
   local has6="$3"
   local cols=()
-  local return_cols
+  local return_cols null_selects
   mapfile -t cols < <(network_lookup_columns)
-  return_cols="$(pg_network_lookup_return_cols_sql "${cols[@]}")"
+  return_cols="$(pg_ident status) text, $(pg_ident ip) text, $(pg_ident ip_version) integer, $(pg_network_lookup_return_cols_sql "${cols[@]}")"
+  null_selects="$(pg_network_lookup_null_selects_sql "${cols[@]}")"
   cat >> "$file" <<SQL
 DROP FUNCTION IF EXISTS $(pg_ident find_network_by_ip)(text);
 
@@ -2826,13 +2955,17 @@ AS \$\$
 DECLARE
     v_ip inet;
 BEGIN
+    IF p_ip IS NULL OR position('/' in p_ip) > 0 OR NOT pg_input_is_valid(p_ip, 'inet') THEN
+        RETURN QUERY SELECT 'invalid_ip'::text, p_ip, NULL::integer, $null_selects;
+        RETURN;
+    END IF;
     v_ip := p_ip::inet;
 SQL
   if [[ "$has4" == "true" ]]; then
     cat >> "$file" <<SQL
     IF family(v_ip) = 4 THEN
 SQL
-    write_pg_network_lookup_branch "$file" ipv4
+    write_pg_network_status_lookup_branch "$file" ipv4 4 "${cols[@]}"
     cat >> "$file" <<SQL
     END IF;
 SQL
@@ -2841,12 +2974,13 @@ SQL
     cat >> "$file" <<SQL
     IF family(v_ip) = 6 THEN
 SQL
-    write_pg_network_lookup_branch "$file" ipv6
+    write_pg_network_status_lookup_branch "$file" ipv6 6 "${cols[@]}"
     cat >> "$file" <<SQL
     END IF;
 SQL
   fi
   cat >> "$file" <<SQL
+    RETURN QUERY SELECT 'not_found'::text, p_ip, family(v_ip), $null_selects;
     RETURN;
 END;
 \$\$;
@@ -2875,6 +3009,9 @@ AS \$\$
 DECLARE
     v_ip inet;
 BEGIN
+    IF p_ip IS NULL OR position('/' in p_ip) > 0 OR NOT pg_input_is_valid(p_ip, 'inet') THEN
+        RETURN;
+    END IF;
     v_ip := p_ip::inet;
     IF family(v_ip) <> $family THEN
         RETURN;
@@ -2924,7 +3061,8 @@ write_mysql_network_lookup_batch_update_branch() {
                 ORDER BY b.$(ident start_ip) DESC
                 LIMIT 1
             ) AS candidate ON candidate.$(ident __last_ip) >= $value_var
-            SET $update_assignments
+            SET r.$(mysql_ident status) = 'ok',
+                $update_assignments
             WHERE r.$(ident ord) = v_ord;
 SQL
 }
@@ -2945,68 +3083,37 @@ write_mysql_network_lookup_batch_body() {
 $temp_columns
     ) ENGINE=$temp_engine;
 
-    SET idx = 0;
+    SET idx = LEAST(item_count, (page_param - 1) * per_page_param);
+    SET item_count = LEAST(item_count, idx + per_page_param);
     WHILE idx < item_count DO
         SET v_ord = idx + 1;
-        SET v_ip = CASE
-            WHEN JSON_TYPE(JSON_EXTRACT(ips_json, CONCAT('\$[', idx, ']'))) = 'NULL' THEN NULL
-            ELSE JSON_UNQUOTE(JSON_EXTRACT(ips_json, CONCAT('\$[', idx, ']')))
-        END;
+        SET v_item = JSON_EXTRACT(ips_json, CONCAT('\$[', idx, ']'));
+        SET v_ip = CASE WHEN JSON_TYPE(v_item) = 'STRING' THEN JSON_UNQUOTE(v_item) ELSE NULL END;
         SET v_ip4 = NULL;
         SET v_ip6 = NULL;
 
-        INSERT INTO $(mysql_ident _find_networks_by_ips_json_result) ($(ident ord), $(ident ip)) VALUES (v_ord, v_ip);
+        INSERT INTO $(mysql_ident _find_networks_by_ips_json_result)
+            ($(ident ord), $(ident ip), $(ident status), $(ident ip_version))
+        VALUES (v_ord, v_ip, 'invalid_ip', NULL);
 
-        IF v_ip IS NOT NULL THEN
+        IF v_ip IS NOT NULL AND IS_IPV6(v_ip) = 1 THEN
+            UPDATE $(mysql_ident _find_networks_by_ips_json_result)
+            SET $(ident status) = 'not_found', $(ident ip_version) = 6
+            WHERE $(ident ord) = v_ord;
+            SET v_ip6 = $(mysql_ident inet6_aton_decimal)(v_ip);
 SQL
-  if [[ "$branch_has4" == "true" && "$branch_has6" == "true" ]]; then
-    cat >> "$file" <<SQL
-            IF INSTR(v_ip, ':') > 0 THEN
-SQL
-    cat >> "$file" <<SQL
-                SET v_ip6 = $(mysql_ident inet6_aton_decimal)(v_ip);
-                IF v_ip6 IS NOT NULL THEN
-SQL
+  if [[ "$branch_has6" == "true" ]]; then
     write_mysql_network_lookup_batch_update_branch "$file" ipv6 v_ip6 "${cols[@]}"
-    cat >> "$file" <<SQL
-                END IF;
-SQL
+  fi
   cat >> "$file" <<SQL
-            ELSE
+        ELSEIF v_ip IS NOT NULL AND IS_IPV4(v_ip) = 1 THEN
+            UPDATE $(mysql_ident _find_networks_by_ips_json_result)
+            SET $(ident status) = 'not_found', $(ident ip_version) = 4
+            WHERE $(ident ord) = v_ord;
+            SET v_ip4 = INET_ATON(v_ip);
 SQL
-    cat >> "$file" <<SQL
-                SET v_ip4 = INET_ATON(v_ip);
-                IF v_ip4 IS NOT NULL THEN
-SQL
+  if [[ "$branch_has4" == "true" ]]; then
     write_mysql_network_lookup_batch_update_branch "$file" ipv4 v_ip4 "${cols[@]}"
-    cat >> "$file" <<SQL
-                END IF;
-SQL
-    cat >> "$file" <<SQL
-            END IF;
-SQL
-  elif [[ "$branch_has6" == "true" ]]; then
-    cat >> "$file" <<SQL
-            IF INSTR(v_ip, ':') > 0 THEN
-                SET v_ip6 = $(mysql_ident inet6_aton_decimal)(v_ip);
-                IF v_ip6 IS NOT NULL THEN
-SQL
-    write_mysql_network_lookup_batch_update_branch "$file" ipv6 v_ip6 "${cols[@]}"
-    cat >> "$file" <<SQL
-                END IF;
-            END IF;
-SQL
-  elif [[ "$branch_has4" == "true" ]]; then
-    cat >> "$file" <<SQL
-            IF INSTR(v_ip, ':') = 0 THEN
-                SET v_ip4 = INET_ATON(v_ip);
-                IF v_ip4 IS NOT NULL THEN
-SQL
-    write_mysql_network_lookup_batch_update_branch "$file" ipv4 v_ip4 "${cols[@]}"
-    cat >> "$file" <<SQL
-                END IF;
-            END IF;
-SQL
   fi
   cat >> "$file" <<SQL
         END IF;
@@ -3014,42 +3121,13 @@ SQL
         SET idx = idx + 1;
     END WHILE;
 
-    SELECT r.$(ident ord) AS $(ident ord), r.$(ident ip) AS $(ident ip), $batch_selects
+    SELECT r.$(ident ord) AS $(ident ord), v_total_count AS $(ident total_count), r.$(ident ip) AS $(ident ip),
+           r.$(ident status) AS $(ident status), r.$(ident ip_version) AS $(ident ip_version),
+           $batch_selects
     FROM $(mysql_ident _find_networks_by_ips_json_result) r
     ORDER BY r.$(ident ord);
 
     DROP TEMPORARY TABLE IF EXISTS $(mysql_ident _find_networks_by_ips_json_result);
-SQL
-}
-
-write_mysql_network_lookup_batch_detect_input_sql() {
-  local file="$1"
-  cat >> "$file" <<SQL
-    SET idx = 0;
-    WHILE idx < item_count DO
-        SET v_ip = CASE
-            WHEN JSON_TYPE(JSON_EXTRACT(ips_json, CONCAT('\$[', idx, ']'))) = 'NULL' THEN NULL
-            ELSE JSON_UNQUOTE(JSON_EXTRACT(ips_json, CONCAT('\$[', idx, ']')))
-        END;
-        SET v_ip4 = NULL;
-        SET v_ip6 = NULL;
-
-        IF v_ip IS NOT NULL THEN
-            IF INSTR(v_ip, ':') > 0 THEN
-                SET v_ip6 = $(mysql_ident inet6_aton_decimal)(v_ip);
-                IF v_ip6 IS NOT NULL THEN
-                    SET v_has_ipv6 = 1;
-                END IF;
-            ELSE
-                SET v_ip4 = INET_ATON(v_ip);
-                IF v_ip4 IS NOT NULL THEN
-                    SET v_has_ipv4 = 1;
-                END IF;
-            END IF;
-        END IF;
-
-        SET idx = idx + 1;
-    END WHILE;
 SQL
 }
 
@@ -3058,59 +3136,106 @@ write_mysql_network_lookup_batch_procedure() {
   local definer="$2"
   local has4="$3"
   local has6="$4"
-  local cols=() cols4=() cols6=()
+  local cols=()
   mapfile -t cols < <(network_lookup_columns)
-  [[ "$has4" == "true" ]] && mapfile -t cols4 < <(network_lookup_table_columns ipv4)
-  [[ "$has6" == "true" ]] && mapfile -t cols6 < <(network_lookup_table_columns ipv6)
   cat >> "$file" <<SQL
 DELIMITER \$\$
 DROP PROCEDURE IF EXISTS $(mysql_ident find_networks_by_ips_json)\$\$
-CREATE ${definer}PROCEDURE $(mysql_ident find_networks_by_ips_json)(ips_json JSON)
+DROP PROCEDURE IF EXISTS $(mysql_ident find_networks_by_json_ips)\$\$
+CREATE ${definer}PROCEDURE $(mysql_ident find_networks_by_json_ips)(ips_json JSON, page_param BIGINT UNSIGNED, per_page_param BIGINT UNSIGNED)
     READS SQL DATA
 BEGIN
     DECLARE idx INT UNSIGNED DEFAULT 0;
     DECLARE item_count INT UNSIGNED DEFAULT 0;
+    DECLARE v_total_count INT UNSIGNED DEFAULT 0;
     DECLARE v_ord INT UNSIGNED DEFAULT 0;
+    DECLARE v_item JSON DEFAULT NULL;
     DECLARE v_ip VARCHAR(45) DEFAULT NULL;
     DECLARE v_ip4 INT UNSIGNED DEFAULT NULL;
     DECLARE v_ip6 DECIMAL(39,0) DEFAULT NULL;
-    DECLARE v_has_ipv4 TINYINT UNSIGNED DEFAULT 0;
-    DECLARE v_has_ipv6 TINYINT UNSIGNED DEFAULT 0;
 
-    SET item_count = CASE
-        WHEN JSON_TYPE(ips_json) = 'ARRAY' THEN COALESCE(JSON_LENGTH(ips_json), 0)
-        ELSE 0
-    END;
-
-SQL
-  if [[ "$has4" == "true" && "$has6" == "true" ]]; then
-    write_mysql_network_lookup_batch_detect_input_sql "$file"
-    cat >> "$file" <<SQL
-
-    IF v_has_ipv4 = 1 AND v_has_ipv6 = 0 THEN
-SQL
-    write_mysql_network_lookup_batch_body "$file" true false "${cols4[@]}"
-    cat >> "$file" <<SQL
-    ELSEIF v_has_ipv4 = 0 AND v_has_ipv6 = 1 THEN
-SQL
-    write_mysql_network_lookup_batch_body "$file" false true "${cols6[@]}"
-    cat >> "$file" <<SQL
-    ELSE
-SQL
-    write_mysql_network_lookup_batch_body "$file" true true "${cols[@]}"
-    cat >> "$file" <<SQL
+    IF ips_json IS NULL OR JSON_TYPE(ips_json) <> 'ARRAY' THEN
+        SIGNAL SQLSTATE '22032' SET MESSAGE_TEXT = 'ips_json must be a JSON array';
     END IF;
+    IF page_param IS NULL OR page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'page must be greater than or equal to 1';
+    END IF;
+    IF per_page_param IS NULL OR per_page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'per_page must be greater than or equal to 1';
+    END IF;
+    SET v_total_count = COALESCE(JSON_LENGTH(ips_json), 0);
+    SET item_count = v_total_count;
+
 SQL
-  elif [[ "$has4" == "true" ]]; then
-    write_mysql_network_lookup_batch_body "$file" true false "${cols4[@]}"
-  elif [[ "$has6" == "true" ]]; then
-    write_mysql_network_lookup_batch_body "$file" false true "${cols6[@]}"
-  else
-    write_mysql_network_lookup_batch_body "$file" false false "${cols[@]}"
-  fi
+  write_mysql_network_lookup_batch_body "$file" "$has4" "$has6" "${cols[@]}"
   cat >> "$file" <<SQL
 END\$\$
 DELIMITER ;
+
+SQL
+}
+
+write_pg_batch_page_offset_function() {
+  local file="$1"
+  cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident _batch_page_offset)(integer);
+DROP FUNCTION IF EXISTS $(pg_ident _batch_page_offset)(integer, integer);
+
+CREATE OR REPLACE FUNCTION $(pg_ident _batch_page_offset)(p_page integer, p_per_page integer)
+RETURNS bigint
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+$(pg_routine_search_path_clause)
+AS \$\$
+BEGIN
+    IF p_page IS NULL OR p_page < 1 THEN
+        RAISE EXCEPTION 'page must be greater than or equal to 1' USING ERRCODE = '22023';
+    END IF;
+    IF p_per_page IS NULL OR p_per_page < 1 THEN
+        RAISE EXCEPTION 'per_page must be greater than or equal to 1' USING ERRCODE = '22023';
+    END IF;
+    RETURN (p_page::bigint - 1) * p_per_page::bigint;
+END;
+\$\$;
+
+SQL
+}
+
+write_pg_routine_precleanup() {
+  local file="$1"
+  cat >> "$file" <<SQL
+-- Drop generated wrappers before replacing routines they depend on.
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_ip)(text, jsonb, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_json_geoname_ids)(jsonb, text, integer, integer, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_geoname_ids_json)(jsonb, text, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_geoname_ids_json)(jsonb, text, integer, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_ips)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_geoname_ids)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_ips)(jsonb, integer, integer, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_geoname_ids)(jsonb, integer, integer, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_ip)(text);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_geoname_ids_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_geoname_ids_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_e_geoname_ids_by_json_ips)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_effective_geoname_ids_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_effective_geoname_ids_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoname_ids_by_json_ips)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_ip_geoname_ids_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_ip_geoname_ids_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoname_ids_by_ip)(text);
+DROP FUNCTION IF EXISTS $(pg_ident find_ip_geoname_ids_by_ip)(text);
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv4_networks_by_json_ips)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv6_networks_by_json_ips)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_networks_by_json_ips)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv4_networks_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv4_networks_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv6_networks_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv6_networks_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_networks_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_networks_by_ips_json)(jsonb, integer);
 
 SQL
 }
@@ -3146,25 +3271,44 @@ write_pg_network_lookup_batch_function_named() {
   shift 4
   local cols=("$@")
   local return_cols batch_selects wrote_branch=false
-  return_cols="$(pg_ident ord) integer, $(pg_ident ip) text"
+  return_cols="$(pg_ident ord) integer, $(pg_ident total_count) bigint, $(pg_ident ip) text, $(pg_ident status) text, $(pg_ident ip_version) integer"
   return_cols="${return_cols}, $(pg_network_lookup_return_cols_sql "${cols[@]}")"
   batch_selects="$(network_lookup_alias_selects_sql c "${cols[@]}")"
   cat >> "$file" <<SQL
 DROP FUNCTION IF EXISTS $(pg_ident "$name")(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident "$name")(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident "$name")(jsonb, integer, integer);
 
-CREATE OR REPLACE FUNCTION $(pg_ident "$name")(p_ips jsonb)
+CREATE OR REPLACE FUNCTION $(pg_ident "$name")(p_ips jsonb, p_page integer, p_per_page integer)
 RETURNS TABLE($return_cols)
 LANGUAGE sql
 STABLE
 $(pg_routine_search_path_clause)
 AS \$\$
-WITH input AS (
+WITH raw_input AS (
     SELECT item.$(ident ord)::integer AS $(ident ord),
-           item.$(ident ip) AS $(ident ip),
-           item.$(ident ip)::inet AS $(ident parsed_ip)
-    FROM jsonb_array_elements_text(p_ips) WITH ORDINALITY AS item($(ident ip), $(ident ord))
+           jsonb_array_length(p_ips)::bigint AS $(ident total_count),
+           CASE WHEN jsonb_typeof(item.$(ident value)) = 'string' THEN item.$(ident value) #>> '{}' ELSE NULL END AS $(ident ip)
+    FROM jsonb_array_elements(COALESCE(p_ips, 'null'::jsonb)) WITH ORDINALITY AS item($(ident value), $(ident ord))
+    ORDER BY item.$(ident ord)
+    LIMIT p_per_page OFFSET $(pg_ident _batch_page_offset)(p_page, p_per_page)
+), input AS (
+    SELECT r.$(ident ord), r.$(ident total_count), r.$(ident ip),
+           CASE
+             WHEN r.$(ident ip) IS NOT NULL
+              AND position('/' in r.$(ident ip)) = 0
+              AND pg_input_is_valid(r.$(ident ip), 'inet')
+             THEN r.$(ident ip)::inet
+             ELSE NULL
+           END AS $(ident parsed_ip)
+    FROM raw_input r
 )
-SELECT i.$(ident ord), i.$(ident ip), $batch_selects
+SELECT i.$(ident ord), i.$(ident total_count), i.$(ident ip),
+       CASE WHEN i.$(ident parsed_ip) IS NULL THEN 'invalid_ip'
+            WHEN c.$(ident network) IS NULL THEN 'not_found'
+            ELSE 'ok' END AS $(ident status),
+       CASE WHEN i.$(ident parsed_ip) IS NULL THEN NULL ELSE family(i.$(ident parsed_ip)) END AS $(ident ip_version),
+       $batch_selects
 FROM input i
 LEFT JOIN LATERAL (
 SQL
@@ -3190,7 +3334,13 @@ write_pg_network_lookup_batch_function() {
   local has6="$3"
   local cols=()
   mapfile -t cols < <(network_lookup_columns)
-  write_pg_network_lookup_batch_function_named "$file" find_networks_by_ips_json "$has4" "$has6" "${cols[@]}"
+  cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident find_networks_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_networks_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_networks_by_ips_json)(jsonb, integer, integer);
+
+SQL
+  write_pg_network_lookup_batch_function_named "$file" find_networks_by_json_ips "$has4" "$has6" "${cols[@]}"
 }
 
 write_pg_network_lookup_batch_family_functions() {
@@ -3200,18 +3350,326 @@ write_pg_network_lookup_batch_family_functions() {
   local cols4=() cols6=()
   if [[ "$has4" == "true" ]]; then
     mapfile -t cols4 < <(network_lookup_table_columns ipv4)
-    write_pg_network_lookup_batch_function_named "$file" find_ipv4_networks_by_ips_json true false "${cols4[@]}"
+    cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv4_networks_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv4_networks_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv4_networks_by_ips_json)(jsonb, integer, integer);
+
+SQL
+    write_pg_network_lookup_batch_function_named "$file" find_ipv4_networks_by_json_ips true false "${cols4[@]}"
   else
     echo "DROP FUNCTION IF EXISTS $(pg_ident find_ipv4_networks_by_ips_json)(jsonb);" >> "$file"
+    echo "DROP FUNCTION IF EXISTS $(pg_ident find_ipv4_networks_by_ips_json)(jsonb, integer);" >> "$file"
+    echo "DROP FUNCTION IF EXISTS $(pg_ident find_ipv4_networks_by_json_ips)(jsonb, integer, integer);" >> "$file"
     echo >> "$file"
   fi
   if [[ "$has6" == "true" ]]; then
     mapfile -t cols6 < <(network_lookup_table_columns ipv6)
-    write_pg_network_lookup_batch_function_named "$file" find_ipv6_networks_by_ips_json false true "${cols6[@]}"
+    cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv6_networks_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv6_networks_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_ipv6_networks_by_ips_json)(jsonb, integer, integer);
+
+SQL
+    write_pg_network_lookup_batch_function_named "$file" find_ipv6_networks_by_json_ips false true "${cols6[@]}"
   else
     echo "DROP FUNCTION IF EXISTS $(pg_ident find_ipv6_networks_by_ips_json)(jsonb);" >> "$file"
+    echo "DROP FUNCTION IF EXISTS $(pg_ident find_ipv6_networks_by_ips_json)(jsonb, integer);" >> "$file"
+    echo "DROP FUNCTION IF EXISTS $(pg_ident find_ipv6_networks_by_json_ips)(jsonb, integer, integer);" >> "$file"
     echo >> "$file"
   fi
+}
+
+effective_geoname_source_expr() {
+  local alias="$1"
+  printf "CASE %s.%s WHEN 1 THEN 'geoname_id' WHEN 2 THEN 'registered_country_geoname_id' WHEN 3 THEN 'represented_country_geoname_id' ELSE NULL END" "$alias" "$(ident e_geoname_source_code)"
+}
+
+geoname_role_label_column() {
+  case "$1" in
+    geoname_id) printf 'geoname_label' ;;
+    registered_country_geoname_id) printf 'registered_country_label' ;;
+    represented_country_geoname_id) printf 'represented_country_label' ;;
+    *) die "Unsupported GeoName role column: $1" ;;
+  esac
+}
+
+write_mysql_ip_geoname_lookup_branch() {
+  local file="$1"
+  local table="$2"
+  local value_expr="$3"
+  local ip_version="$4"
+  local role outer_role_selects="" inner_role_selects=""
+  local roles=()
+  mapfile -t roles < <(enabled_geoname_role_columns)
+  for role in "${roles[@]}"; do
+    outer_role_selects+=$',\n'"               candidate.$(ident "$role") AS $(ident "$role")"
+    if column_enabled "$table" "$role"; then
+      inner_role_selects+=$',\n'"                   b.$(ident "$role") AS $(ident "$role")"
+    else
+      inner_role_selects+=$',\n'"                   NULL AS $(ident "$role")"
+    fi
+  done
+  cat >> "$file" <<SQL
+        SELECT CASE WHEN candidate.$(ident network) IS NULL THEN 'not_found'
+                    WHEN candidate.$(ident e_geoname_id) IS NULL THEN 'no_location'
+                    ELSE 'ok' END AS $(ident status),
+               ip AS $(ident ip), $ip_version AS $(ident ip_version), candidate.$(ident network) AS $(ident network),
+               candidate.$(ident e_geoname_id) AS $(ident e_geoname_id),
+               $(effective_geoname_source_expr candidate) AS $(ident e_geoname_source)$outer_role_selects
+        FROM (SELECT 1 AS $(ident seed)) AS seed
+        LEFT JOIN (
+            SELECT b.$(ident network), b.$(ident e_geoname_id), b.$(ident e_geoname_source_code)$inner_role_selects,
+                   b.$(ident last_ip) AS $(ident __last_ip)
+            FROM $(ident "$table") b
+            WHERE b.$(ident start_ip) <= $value_expr
+            ORDER BY b.$(ident start_ip) DESC
+            LIMIT 1
+        ) candidate ON candidate.$(ident __last_ip) >= $value_expr;
+SQL
+}
+
+write_mysql_ip_geoname_lookup_procedure() {
+  local file="$1"
+  local definer="$2"
+  local has4="$3"
+  local has6="$4"
+  local role null_role_selects=""
+  local roles=()
+  mapfile -t roles < <(enabled_geoname_role_columns)
+  for role in "${roles[@]}"; do
+    null_role_selects+=$',\n'"               NULL AS $(ident "$role")"
+  done
+  cat >> "$file" <<SQL
+DELIMITER \$\$
+DROP PROCEDURE IF EXISTS $(mysql_ident find_ip_geoname_ids_by_ip)\$\$
+DROP PROCEDURE IF EXISTS $(mysql_ident find_geoname_ids_by_ip)\$\$
+CREATE ${definer}PROCEDURE $(mysql_ident find_geoname_ids_by_ip)(ip VARCHAR(45))
+    READS SQL DATA
+    SQL SECURITY INVOKER
+BEGIN
+SQL
+  [[ "$has6" == "true" ]] && echo "    DECLARE ip6 DECIMAL(39,0) DEFAULT NULL;" >> "$file"
+  [[ "$has4" == "true" ]] && echo "    DECLARE ip4 INT UNSIGNED DEFAULT NULL;" >> "$file"
+  cat >> "$file" <<SQL
+    IF IS_IPV6(ip) = 1 THEN
+SQL
+  if [[ "$has6" == "true" ]]; then
+    echo "        SET ip6 = $(mysql_ident inet6_aton_decimal)(ip);" >> "$file"
+    write_mysql_ip_geoname_lookup_branch "$file" ipv6 ip6 6
+  else
+    cat >> "$file" <<SQL
+        SELECT 'not_found' AS $(ident status), ip AS $(ident ip), 6 AS $(ident ip_version),
+               NULL AS $(ident network), NULL AS $(ident e_geoname_id), NULL AS $(ident e_geoname_source)$null_role_selects;
+SQL
+  fi
+  cat >> "$file" <<SQL
+    ELSEIF IS_IPV4(ip) = 1 THEN
+SQL
+  if [[ "$has4" == "true" ]]; then
+    echo "        SET ip4 = INET_ATON(ip);" >> "$file"
+    write_mysql_ip_geoname_lookup_branch "$file" ipv4 ip4 4
+  else
+    cat >> "$file" <<SQL
+        SELECT 'not_found' AS $(ident status), ip AS $(ident ip), 4 AS $(ident ip_version),
+               NULL AS $(ident network), NULL AS $(ident e_geoname_id), NULL AS $(ident e_geoname_source)$null_role_selects;
+SQL
+  fi
+  cat >> "$file" <<SQL
+    ELSE
+        SELECT 'invalid_ip' AS $(ident status), ip AS $(ident ip), NULL AS $(ident ip_version),
+               NULL AS $(ident network), NULL AS $(ident e_geoname_id), NULL AS $(ident e_geoname_source)$null_role_selects;
+    END IF;
+END\$\$
+DELIMITER ;
+
+SQL
+}
+
+write_mysql_ip_geoname_batch_update_branch() {
+  local file="$1"
+  local table="$2"
+  local value_var="$3"
+  shift 3
+  local roles=("$@")
+  local role inner_role_selects="" set_role_values=""
+  for role in "${roles[@]}"; do
+    if column_enabled "$table" "$role"; then
+      inner_role_selects+=$',\n'"                       b.$(ident "$role") AS $(ident "$role")"
+    else
+      inner_role_selects+=$',\n'"                       NULL AS $(ident "$role")"
+    fi
+    set_role_values+=$',\n'"                 r.$(ident "$role") = candidate.$(ident "$role")"
+  done
+  cat >> "$file" <<SQL
+            UPDATE $(mysql_ident _find_ip_geoname_ids_result) r
+            JOIN (
+                SELECT b.$(ident network), b.$(ident e_geoname_id), b.$(ident e_geoname_source_code)$inner_role_selects,
+                       b.$(ident last_ip) AS $(ident __last_ip)
+                FROM $(ident "$table") b
+                WHERE b.$(ident start_ip) <= $value_var
+                ORDER BY b.$(ident start_ip) DESC
+                LIMIT 1
+            ) candidate ON candidate.$(ident __last_ip) >= $value_var
+            SET r.$(ident status) = CASE WHEN candidate.$(ident e_geoname_id) IS NULL THEN 'no_location' ELSE 'ok' END,
+                r.$(ident network) = candidate.$(ident network),
+                r.$(ident e_geoname_id) = candidate.$(ident e_geoname_id),
+                r.$(ident e_geoname_source_code) = candidate.$(ident e_geoname_source_code)$set_role_values
+            WHERE r.$(ident ord) = v_ord;
+SQL
+}
+
+write_mysql_ip_geoname_lookup_batch_procedure() {
+  local file="$1"
+  local definer="$2"
+  local has4="$3"
+  local has6="$4"
+  local role output_role_selects=""
+  local roles=()
+  mapfile -t roles < <(enabled_geoname_role_columns)
+  for role in "${roles[@]}"; do
+    output_role_selects+=$',\n'"           r.$(ident "$role") AS $(ident "$role")"
+  done
+  cat >> "$file" <<SQL
+DELIMITER \$\$
+DROP PROCEDURE IF EXISTS $(mysql_ident find_ip_geoname_ids_by_ips_json)\$\$
+DROP PROCEDURE IF EXISTS $(mysql_ident find_geoname_ids_by_json_ips)\$\$
+CREATE ${definer}PROCEDURE $(mysql_ident find_geoname_ids_by_json_ips)(ips_json JSON, page_param BIGINT UNSIGNED, per_page_param BIGINT UNSIGNED)
+    READS SQL DATA
+    SQL SECURITY INVOKER
+BEGIN
+    DECLARE idx INT UNSIGNED DEFAULT 0;
+    DECLARE item_count INT UNSIGNED DEFAULT 0;
+    DECLARE v_total_count INT UNSIGNED DEFAULT 0;
+    DECLARE v_ord INT UNSIGNED DEFAULT 0;
+    DECLARE v_item JSON DEFAULT NULL;
+    DECLARE v_ip VARCHAR(45) DEFAULT NULL;
+    DECLARE v_ip4 INT UNSIGNED DEFAULT NULL;
+    DECLARE v_ip6 DECIMAL(39,0) DEFAULT NULL;
+
+    IF ips_json IS NULL OR JSON_TYPE(ips_json) <> 'ARRAY' THEN
+        SIGNAL SQLSTATE '22032' SET MESSAGE_TEXT = 'ips_json must be a JSON array';
+    END IF;
+    IF page_param IS NULL OR page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'page must be greater than or equal to 1';
+    END IF;
+    IF per_page_param IS NULL OR per_page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'per_page must be greater than or equal to 1';
+    END IF;
+    SET v_total_count = COALESCE(JSON_LENGTH(ips_json), 0);
+    SET item_count = v_total_count;
+    SET idx = LEAST(item_count, (page_param - 1) * per_page_param);
+    SET item_count = LEAST(item_count, idx + per_page_param);
+
+    DROP TEMPORARY TABLE IF EXISTS $(mysql_ident _find_ip_geoname_ids_result);
+    CREATE TEMPORARY TABLE $(mysql_ident _find_ip_geoname_ids_result) (
+        $(ident ord) INT UNSIGNED NOT NULL,
+        $(ident ip) VARCHAR(45) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+        $(ident status) VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+        $(ident ip_version) TINYINT UNSIGNED DEFAULT NULL,
+        $(ident network) VARCHAR(43) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+        $(ident e_geoname_id) INT UNSIGNED DEFAULT NULL,
+        $(ident e_geoname_source_code) TINYINT UNSIGNED DEFAULT NULL,
+SQL
+  for role in "${roles[@]}"; do
+    echo "        $(ident "$role") INT UNSIGNED DEFAULT NULL," >> "$file"
+  done
+  cat >> "$file" <<SQL
+        PRIMARY KEY ($(ident ord))
+    ) ENGINE=MEMORY DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    WHILE idx < item_count DO
+        SET v_ord = idx + 1;
+        SET v_item = JSON_EXTRACT(ips_json, CONCAT('\$[', idx, ']'));
+        SET v_ip = CASE WHEN JSON_TYPE(v_item) = 'STRING' THEN JSON_UNQUOTE(v_item) ELSE NULL END;
+        SET v_ip4 = NULL;
+        SET v_ip6 = NULL;
+        INSERT INTO $(mysql_ident _find_ip_geoname_ids_result) ($(ident ord), $(ident ip), $(ident status))
+        VALUES (v_ord, v_ip, 'invalid_ip');
+
+        IF v_ip IS NOT NULL AND IS_IPV6(v_ip) = 1 THEN
+            UPDATE $(mysql_ident _find_ip_geoname_ids_result) SET $(ident status) = 'not_found', $(ident ip_version) = 6 WHERE $(ident ord) = v_ord;
+            SET v_ip6 = $(mysql_ident inet6_aton_decimal)(v_ip);
+SQL
+  [[ "$has6" == "true" ]] && write_mysql_ip_geoname_batch_update_branch "$file" ipv6 v_ip6 "${roles[@]}"
+  cat >> "$file" <<SQL
+        ELSEIF v_ip IS NOT NULL AND IS_IPV4(v_ip) = 1 THEN
+            UPDATE $(mysql_ident _find_ip_geoname_ids_result) SET $(ident status) = 'not_found', $(ident ip_version) = 4 WHERE $(ident ord) = v_ord;
+            SET v_ip4 = INET_ATON(v_ip);
+SQL
+  [[ "$has4" == "true" ]] && write_mysql_ip_geoname_batch_update_branch "$file" ipv4 v_ip4 "${roles[@]}"
+  cat >> "$file" <<SQL
+        END IF;
+        SET idx = idx + 1;
+    END WHILE;
+
+    SELECT r.$(ident ord), v_total_count AS $(ident total_count), r.$(ident ip), r.$(ident status), r.$(ident ip_version), r.$(ident network),
+           r.$(ident e_geoname_id) AS $(ident e_geoname_id),
+           $(effective_geoname_source_expr r) AS $(ident e_geoname_source)$output_role_selects
+    FROM $(mysql_ident _find_ip_geoname_ids_result) r
+    ORDER BY r.$(ident ord);
+
+    DROP TEMPORARY TABLE IF EXISTS $(mysql_ident _find_ip_geoname_ids_result);
+END\$\$
+DELIMITER ;
+
+SQL
+}
+
+write_pg_ip_geoname_lookup_functions() {
+  local file="$1"
+  local role return_role_columns="" select_role_columns=""
+  local roles=()
+  mapfile -t roles < <(enabled_geoname_role_columns)
+  for role in "${roles[@]}"; do
+    return_role_columns+=$',\n'"    $(ident "$role") integer"
+    select_role_columns+=$',\n'"       n.$(ident "$role") AS $(ident "$role")"
+  done
+  cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident find_ip_geoname_ids_by_ip)(text);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoname_ids_by_ip)(text);
+
+CREATE OR REPLACE FUNCTION $(pg_ident find_geoname_ids_by_ip)(p_ip text)
+RETURNS TABLE(
+    $(ident status) text, $(ident ip) text, $(ident ip_version) integer, $(ident network) cidr,
+    $(ident e_geoname_id) integer, $(ident e_geoname_source) text$return_role_columns
+)
+LANGUAGE sql
+STABLE
+$(pg_routine_search_path_clause)
+AS \$\$
+SELECT CASE WHEN n.$(ident status) = 'ok' AND n.$(ident e_geoname_id) IS NULL
+            THEN 'no_location' ELSE n.$(ident status) END AS $(ident status),
+       n.$(ident ip), n.$(ident ip_version), n.$(ident network),
+       n.$(ident e_geoname_id) AS $(ident e_geoname_id),
+       $(effective_geoname_source_expr n) AS $(ident e_geoname_source)$select_role_columns
+FROM $(pg_ident find_network_by_ip)(p_ip) n;
+\$\$;
+
+DROP FUNCTION IF EXISTS $(pg_ident find_ip_geoname_ids_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_ip_geoname_ids_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoname_ids_by_json_ips)(jsonb, integer, integer);
+
+CREATE OR REPLACE FUNCTION $(pg_ident find_geoname_ids_by_json_ips)(p_ips jsonb, p_page integer, p_per_page integer)
+RETURNS TABLE(
+    $(ident ord) integer, $(ident total_count) bigint, $(ident ip) text, $(ident status) text, $(ident ip_version) integer, $(ident network) cidr,
+    $(ident e_geoname_id) integer, $(ident e_geoname_source) text$return_role_columns
+)
+LANGUAGE sql
+STABLE
+$(pg_routine_search_path_clause)
+AS \$\$
+SELECT n.$(ident ord), n.$(ident total_count), n.$(ident ip),
+       CASE WHEN n.$(ident status) = 'ok' AND n.$(ident e_geoname_id) IS NULL
+            THEN 'no_location' ELSE n.$(ident status) END AS $(ident status),
+       n.$(ident ip_version), n.$(ident network),
+       n.$(ident e_geoname_id) AS $(ident e_geoname_id),
+       $(effective_geoname_source_expr n) AS $(ident e_geoname_source)$select_role_columns
+FROM $(pg_ident find_networks_by_json_ips)(p_ips, p_page, p_per_page) n
+ORDER BY n.$(ident ord);
+\$\$;
+
+SQL
 }
 
 write_mysql_batch_geoinfo_select_columns() {
@@ -3222,6 +3680,7 @@ write_mysql_batch_geoinfo_select_columns() {
   local i
   echo "    SELECT" >> "$file"
   echo "        i.$(mysql_ident ord) AS $(mysql_ident ord)" >> "$file"
+  echo "        , i.$(mysql_ident total_count) AS $(mysql_ident total_count)" >> "$file"
   if [[ "$include_ip" == "true" ]]; then
     echo "        , i.$(mysql_ident ip) AS $(mysql_ident ip)" >> "$file"
   fi
@@ -3235,38 +3694,77 @@ write_mysql_location_batch_procedures() {
   local file="$1"
   local definer="$2"
   local routine_names=() routine_exprs=() routine_types=()
-  local mix_expr iso_expr mix_select iso_select
+  local location_entity_table
   routine_select_parts routine_names routine_exprs routine_types
+  if is_city_location; then
+    location_entity_table="city"
+  else
+    location_entity_table="country"
+  fi
   cat >> "$file" <<SQL
-DROP PROCEDURE IF EXISTS $(mysql_ident find_geoname_ids_by_ips_json)\$\$
-CREATE ${definer}PROCEDURE $(mysql_ident find_geoname_ids_by_ips_json)(ips_json JSON)
+DROP PROCEDURE IF EXISTS $(mysql_ident find_effective_geoname_ids_by_ips_json)\$\$
+DROP PROCEDURE IF EXISTS $(mysql_ident find_e_geoname_ids_by_json_ips)\$\$
+CREATE ${definer}PROCEDURE $(mysql_ident find_e_geoname_ids_by_json_ips)(ips_json JSON, page_param BIGINT UNSIGNED, per_page_param BIGINT UNSIGNED)
     READS SQL DATA
 BEGIN
+    IF ips_json IS NULL OR JSON_TYPE(ips_json) <> 'ARRAY' THEN
+        SIGNAL SQLSTATE '22032' SET MESSAGE_TEXT = 'ips_json must be a JSON array';
+    END IF;
+    IF page_param IS NULL OR page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'page must be greater than or equal to 1';
+    END IF;
+    IF per_page_param IS NULL OR per_page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'per_page must be greater than or equal to 1';
+    END IF;
     WITH input AS (
         SELECT CAST(j.$(ident ord) AS UNSIGNED) AS $(ident ord),
+               JSON_LENGTH(ips_json) AS $(ident total_count),
                j.$(ident ip) AS $(ident ip),
-               $(mysql_ident find_geoname_id_by_ip)(j.$(ident ip)) AS $(ident geoname_id)
+               $(mysql_ident find_e_geoname_id_by_ip)(j.$(ident ip)) AS $(ident e_geoname_id)
         FROM JSON_TABLE(ips_json, '\$[*]' COLUMNS (
             $(ident ord) FOR ORDINALITY,
             $(ident ip) VARCHAR(45) PATH '\$'
         )) AS j
+        WHERE j.$(ident ord) > (page_param - 1) * per_page_param
+          AND j.$(ident ord) <= page_param * per_page_param
     )
-    SELECT i.$(ident ord) AS $(ident ord), i.$(ident ip) AS $(ident ip), i.$(ident geoname_id) AS $(ident geoname_id)
+    SELECT i.$(ident ord) AS $(ident ord), i.$(ident total_count) AS $(ident total_count),
+           i.$(ident ip) AS $(ident ip), i.$(ident e_geoname_id) AS $(ident e_geoname_id)
     FROM input i
     ORDER BY i.$(ident ord);
 END\$\$
 
 DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_geoname_ids_json)\$\$
-CREATE ${definer}PROCEDURE $(mysql_ident find_geoinfo_by_geoname_ids_json)(geoname_ids_json JSON)
+DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_json_geoname_ids)\$\$
+CREATE ${definer}PROCEDURE $(mysql_ident find_geoinfo_by_json_geoname_ids)(
+    geoname_ids_json JSON,
+    include_continent INT UNSIGNED,
+    include_iso_code INT UNSIGNED,
+    include_emoji INT UNSIGNED,
+    page_param BIGINT UNSIGNED,
+    per_page_param BIGINT UNSIGNED
+)
     READS SQL DATA
 BEGIN
+    IF geoname_ids_json IS NULL OR JSON_TYPE(geoname_ids_json) <> 'ARRAY' THEN
+        SIGNAL SQLSTATE '22032' SET MESSAGE_TEXT = 'geoname_ids_json must be a JSON array';
+    END IF;
+    IF page_param IS NULL OR page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'page must be greater than or equal to 1';
+    END IF;
+    IF per_page_param IS NULL OR per_page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'per_page must be greater than or equal to 1';
+    END IF;
     WITH input AS (
         SELECT CAST(j.$(ident ord) AS UNSIGNED) AS $(ident ord),
+               JSON_LENGTH(geoname_ids_json) AS $(ident total_count),
                CAST(j.$(ident geoname_id) AS UNSIGNED) AS $(ident geoname_id)
         FROM JSON_TABLE(geoname_ids_json, '\$[*]' COLUMNS (
             $(ident ord) FOR ORDINALITY,
             $(ident geoname_id) INT PATH '\$'
         )) AS j
+        WHERE j.$(ident ord) > (page_param - 1) * per_page_param
+          AND j.$(ident ord) <= page_param * per_page_param
     )
 SQL
   write_mysql_batch_geoinfo_select_columns "$file" false routine_names routine_exprs
@@ -3276,17 +3774,37 @@ SQL
 END\$\$
 
 DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_ips_json)\$\$
-CREATE ${definer}PROCEDURE $(mysql_ident find_geoinfo_by_ips_json)(ips_json JSON)
+DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_json_ips)\$\$
+CREATE ${definer}PROCEDURE $(mysql_ident find_geoinfo_by_json_ips)(
+    ips_json JSON,
+    include_continent INT UNSIGNED,
+    include_iso_code INT UNSIGNED,
+    include_emoji INT UNSIGNED,
+    page_param BIGINT UNSIGNED,
+    per_page_param BIGINT UNSIGNED
+)
     READS SQL DATA
 BEGIN
+    IF ips_json IS NULL OR JSON_TYPE(ips_json) <> 'ARRAY' THEN
+        SIGNAL SQLSTATE '22032' SET MESSAGE_TEXT = 'ips_json must be a JSON array';
+    END IF;
+    IF page_param IS NULL OR page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'page must be greater than or equal to 1';
+    END IF;
+    IF per_page_param IS NULL OR per_page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'per_page must be greater than or equal to 1';
+    END IF;
     WITH input AS (
         SELECT CAST(j.$(ident ord) AS UNSIGNED) AS $(ident ord),
+               JSON_LENGTH(ips_json) AS $(ident total_count),
                j.$(ident ip) AS $(ident ip),
-               $(mysql_ident find_geoname_id_by_ip)(j.$(ident ip)) AS $(ident geoname_id)
+               $(mysql_ident find_e_geoname_id_by_ip)(j.$(ident ip)) AS $(ident geoname_id)
         FROM JSON_TABLE(ips_json, '\$[*]' COLUMNS (
             $(ident ord) FOR ORDINALITY,
             $(ident ip) VARCHAR(45) PATH '\$'
         )) AS j
+        WHERE j.$(ident ord) > (page_param - 1) * per_page_param
+          AND j.$(ident ord) <= page_param * per_page_param
     )
 SQL
   write_mysql_batch_geoinfo_select_columns "$file" true routine_names routine_exprs
@@ -3296,40 +3814,79 @@ SQL
 END\$\$
 
 SQL
-  mix_expr="$(build_location_mix_expr emoji)"
-  iso_expr="$(build_location_mix_expr iso)"
-  if [[ -n "$mix_expr" ]]; then
-    mix_select="$(mysql_ident build_location_mix)(i.$(mysql_ident geoname_id), append_emoji)"
-  else
-    mix_select="NULL"
-  fi
-  if [[ -n "$iso_expr" ]]; then
-    iso_select="$(mysql_ident build_location_mix_with_iso_code)(i.$(mysql_ident geoname_id))"
-  else
-    iso_select="NULL"
-  fi
-  cat >> "$file" <<SQL
-DROP PROCEDURE IF EXISTS $(mysql_ident build_location_mixes_by_geoname_ids_json)\$\$
-CREATE ${definer}PROCEDURE $(mysql_ident build_location_mixes_by_geoname_ids_json)(geoname_ids_json JSON, append_emoji INT UNSIGNED)
+  if [[ -n "$(location_label_expr locale_param include_continent include_iso_code include_emoji)" ]]; then
+    cat >> "$file" <<SQL
+DROP PROCEDURE IF EXISTS $(mysql_ident build_location_labels_by_geoname_ids_json)\$\$
+DROP PROCEDURE IF EXISTS $(mysql_ident build_location_labels_by_json_geoname_ids)\$\$
+CREATE ${definer}PROCEDURE $(mysql_ident build_location_labels_by_json_geoname_ids)(
+    geoname_ids_json JSON,
+    locale_param VARCHAR(16),
+    include_continent INT UNSIGNED,
+    include_iso_code INT UNSIGNED,
+    include_emoji INT UNSIGNED,
+    page_param BIGINT UNSIGNED,
+    per_page_param BIGINT UNSIGNED
+)
     READS SQL DATA
+    SQL SECURITY INVOKER
 BEGIN
-    WITH input AS (
+    IF geoname_ids_json IS NULL OR JSON_TYPE(geoname_ids_json) <> 'ARRAY' THEN
+        SIGNAL SQLSTATE '22032' SET MESSAGE_TEXT = 'geoname_ids_json must be a JSON array';
+    END IF;
+    IF page_param IS NULL OR page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'page must be greater than or equal to 1';
+    END IF;
+    IF per_page_param IS NULL OR per_page_param < 1 THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'per_page must be greater than or equal to 1';
+    END IF;
+    WITH raw_input AS (
         SELECT CAST(j.$(ident ord) AS UNSIGNED) AS $(ident ord),
-               CAST(j.$(ident geoname_id) AS UNSIGNED) AS $(ident geoname_id)
+               JSON_LENGTH(geoname_ids_json) AS $(ident total_count),
+               JSON_EXTRACT(geoname_ids_json, CONCAT('\$[', j.$(ident ord) - 1, ']')) AS $(ident value)
         FROM JSON_TABLE(geoname_ids_json, '\$[*]' COLUMNS (
-            $(ident ord) FOR ORDINALITY,
-            $(ident geoname_id) INT PATH '\$'
+            $(ident ord) FOR ORDINALITY
         )) AS j
+        WHERE j.$(ident ord) > (page_param - 1) * per_page_param
+          AND j.$(ident ord) <= page_param * per_page_param
+    ), input AS (
+        SELECT r.$(ident ord), r.$(ident total_count),
+               CASE
+                 WHEN JSON_TYPE(r.$(ident value)) IN ('INTEGER', 'STRING')
+                  AND JSON_UNQUOTE(r.$(ident value)) REGEXP '^[0-9]+\$'
+                 THEN CASE
+                        WHEN CAST(JSON_UNQUOTE(r.$(ident value)) AS DECIMAL(20,0)) BETWEEN 1 AND 2147483647
+                        THEN CAST(JSON_UNQUOTE(r.$(ident value)) AS UNSIGNED)
+                      END
+               END AS $(ident geoname_id)
+        FROM raw_input r
+    ), resolved AS (
+        SELECT i.$(ident ord), i.$(ident total_count), i.$(ident geoname_id),
+               CASE
+                 WHEN i.$(ident geoname_id) IS NULL THEN 'invalid_geoname_id'
+                 WHEN EXISTS (
+                     SELECT 1
+                     FROM $(mysql_ident "$location_entity_table") entity
+                     WHERE entity.$(mysql_ident geoname_id) = i.$(mysql_ident geoname_id)
+                 ) THEN 'ok'
+                 ELSE 'not_found'
+               END AS $(ident status),
+               $(mysql_ident build_location_label_by_geoname_id)(i.$(mysql_ident geoname_id), locale_param, include_continent, include_iso_code, include_emoji) AS $(ident location_label)
+        FROM input i
     )
-    SELECT i.$(ident ord) AS $(ident ord),
-           i.$(ident geoname_id) AS $(ident geoname_id),
-           $mix_select AS $(ident location_mix),
-           $iso_select AS $(ident location_mix_iso)
-    FROM input i
-    ORDER BY i.$(ident ord);
+    SELECT r.$(ident ord), r.$(ident total_count), r.$(ident geoname_id), r.$(ident status), r.$(ident location_label)
+    FROM resolved r
+    ORDER BY r.$(ident ord);
 END\$\$
 
 SQL
+  else
+    cat >> "$file" <<SQL
+DROP PROCEDURE IF EXISTS $(mysql_ident build_location_labels_by_geoname_ids_json)\$\$
+DROP PROCEDURE IF EXISTS $(mysql_ident build_location_labels_by_json_geoname_ids)\$\$
+-- build_location_labels_by_json_geoname_ids was not generated because no configured location label columns can be returned.
+
+SQL
+  fi
 }
 
 write_pg_batch_geoinfo_select_columns() {
@@ -3340,10 +3897,11 @@ write_pg_batch_geoinfo_select_columns() {
   local i
   echo "SELECT" >> "$file"
   echo "    i.$(pg_ident ord)" >> "$file"
+  echo "    , i.$(pg_ident total_count)" >> "$file"
   if [[ "$include_ip" == "true" ]]; then
     echo "    , i.$(pg_ident ip)" >> "$file"
   fi
-  echo "    , i.$(pg_ident geoname_id)" >> "$file"
+  echo "    , i.$(pg_ident geoname_id) AS $(pg_ident geoname_id)" >> "$file"
   for ((i = 0; i < ${#names_ref[@]}; i++)); do
     printf "    , %s AS %s\n" "${exprs_ref[i]}" "$(pg_ident "${names_ref[i]}")" >> "$file"
   done
@@ -3352,34 +3910,53 @@ write_pg_batch_geoinfo_select_columns() {
 write_pg_location_batch_functions() {
   local file="$1"
   local routine_names=() routine_exprs=() routine_types=()
-  local return_cols i mix_expr iso_expr mix_select iso_select
+  local return_cols i location_entity_table
   routine_select_parts routine_names routine_exprs routine_types
-  return_cols="$(pg_ident ord) integer, $(pg_ident ip) text, $(pg_ident geoname_id) integer"
+  if is_city_location; then
+    location_entity_table="city"
+  else
+    location_entity_table="country"
+  fi
+  return_cols="$(pg_ident ord) integer, $(pg_ident total_count) bigint, $(pg_ident ip) text, $(pg_ident e_geoname_id) integer"
   cat >> "$file" <<SQL
-DROP FUNCTION IF EXISTS $(pg_ident find_geoname_ids_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_effective_geoname_ids_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_effective_geoname_ids_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_e_geoname_ids_by_json_ips)(jsonb, integer, integer);
 
-CREATE OR REPLACE FUNCTION $(pg_ident find_geoname_ids_by_ips_json)(p_ips jsonb)
+CREATE OR REPLACE FUNCTION $(pg_ident find_e_geoname_ids_by_json_ips)(p_ips jsonb, p_page integer, p_per_page integer)
 RETURNS TABLE($return_cols)
 LANGUAGE sql
 STABLE
 $(pg_routine_search_path_clause)
 AS \$\$
 SELECT item.$(ident ord)::integer AS $(ident ord),
+       jsonb_array_length(p_ips)::bigint AS $(ident total_count),
        item.$(ident ip) AS $(ident ip),
-       $(pg_ident find_geoname_id_by_ip)(item.$(ident ip)) AS $(ident geoname_id)
+       $(pg_ident find_e_geoname_id_by_ip)(item.$(ident ip)) AS $(ident e_geoname_id)
 FROM jsonb_array_elements_text(p_ips) WITH ORDINALITY AS item($(ident ip), $(ident ord))
-ORDER BY item.$(ident ord);
+ORDER BY item.$(ident ord)
+LIMIT p_per_page OFFSET $(pg_ident _batch_page_offset)(p_page, p_per_page);
 \$\$;
 
 SQL
-  return_cols="$(pg_ident ord) integer, $(pg_ident geoname_id) integer"
+  return_cols="$(pg_ident ord) integer, $(pg_ident total_count) bigint, $(pg_ident geoname_id) integer"
   for ((i = 0; i < ${#routine_names[@]}; i++)); do
     return_cols="${return_cols}, $(pg_ident "${routine_names[i]}") ${routine_types[i]}"
   done
   cat >> "$file" <<SQL
 DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_geoname_ids_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_geoname_ids_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_geoname_ids)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_geoname_ids)(jsonb, integer, integer, integer, integer, integer);
 
-CREATE OR REPLACE FUNCTION $(pg_ident find_geoinfo_by_geoname_ids_json)(p_geoname_ids jsonb)
+CREATE OR REPLACE FUNCTION $(pg_ident find_geoinfo_by_json_geoname_ids)(
+    p_geoname_ids jsonb,
+    include_continent integer,
+    include_iso_code integer,
+    include_emoji integer,
+    p_page integer,
+    p_per_page integer
+)
 RETURNS TABLE($return_cols)
 LANGUAGE sql
 STABLE
@@ -3387,8 +3964,11 @@ $(pg_routine_search_path_clause)
 AS \$\$
 WITH input AS (
     SELECT item.$(ident ord)::integer AS $(ident ord),
+           jsonb_array_length(p_geoname_ids)::bigint AS $(ident total_count),
            item.$(ident geoname_id)::integer AS $(ident geoname_id)
     FROM jsonb_array_elements_text(p_geoname_ids) WITH ORDINALITY AS item($(ident geoname_id), $(ident ord))
+    ORDER BY item.$(ident ord)
+    LIMIT p_per_page OFFSET $(pg_ident _batch_page_offset)(p_page, p_per_page)
 )
 SQL
   write_pg_batch_geoinfo_select_columns "$file" false routine_names routine_exprs
@@ -3398,14 +3978,24 @@ ORDER BY i.$(ident ord);
 \$\$;
 
 SQL
-  return_cols="$(pg_ident ord) integer, $(pg_ident ip) text, $(pg_ident geoname_id) integer"
+  return_cols="$(pg_ident ord) integer, $(pg_ident total_count) bigint, $(pg_ident ip) text, $(pg_ident geoname_id) integer"
   for ((i = 0; i < ${#routine_names[@]}; i++)); do
     return_cols="${return_cols}, $(pg_ident "${routine_names[i]}") ${routine_types[i]}"
   done
   cat >> "$file" <<SQL
 DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_ips)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_ips)(jsonb, integer, integer, integer, integer, integer);
 
-CREATE OR REPLACE FUNCTION $(pg_ident find_geoinfo_by_ips_json)(p_ips jsonb)
+CREATE OR REPLACE FUNCTION $(pg_ident find_geoinfo_by_json_ips)(
+    p_ips jsonb,
+    include_continent integer,
+    include_iso_code integer,
+    include_emoji integer,
+    p_page integer,
+    p_per_page integer
+)
 RETURNS TABLE($return_cols)
 LANGUAGE sql
 STABLE
@@ -3413,9 +4003,12 @@ $(pg_routine_search_path_clause)
 AS \$\$
 WITH input AS (
     SELECT item.$(ident ord)::integer AS $(ident ord),
+           jsonb_array_length(p_ips)::bigint AS $(ident total_count),
            item.$(ident ip) AS $(ident ip),
-           $(pg_ident find_geoname_id_by_ip)(item.$(ident ip)) AS $(ident geoname_id)
+           $(pg_ident find_e_geoname_id_by_ip)(item.$(ident ip)) AS $(ident geoname_id)
     FROM jsonb_array_elements_text(p_ips) WITH ORDINALITY AS item($(ident ip), $(ident ord))
+    ORDER BY item.$(ident ord)
+    LIMIT p_per_page OFFSET $(pg_ident _batch_page_offset)(p_page, p_per_page)
 )
 SQL
   write_pg_batch_geoinfo_select_columns "$file" true routine_names routine_exprs
@@ -3425,38 +4018,428 @@ ORDER BY i.$(ident ord);
 \$\$;
 
 SQL
-  mix_expr="$(build_location_mix_expr emoji)"
-  iso_expr="$(build_location_mix_expr iso)"
-  if [[ -n "$mix_expr" ]]; then
-    mix_select="$(pg_ident build_location_mix)(i.$(pg_ident geoname_id), append_emoji)"
-  else
-    mix_select="NULL::text"
-  fi
-  if [[ -n "$iso_expr" ]]; then
-    iso_select="$(pg_ident build_location_mix_with_iso_code)(i.$(pg_ident geoname_id))"
-  else
-    iso_select="NULL::text"
-  fi
-  cat >> "$file" <<SQL
-DROP FUNCTION IF EXISTS $(pg_ident build_location_mixes_by_geoname_ids_json)(jsonb, integer);
+  if [[ -n "$(location_label_expr locale_param include_continent include_iso_code include_emoji)" ]]; then
+    cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_geoname_ids_json)(jsonb, text, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_geoname_ids_json)(jsonb, text, integer, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_json_geoname_ids)(jsonb, text, integer, integer, integer, integer, integer);
 
-CREATE OR REPLACE FUNCTION $(pg_ident build_location_mixes_by_geoname_ids_json)(p_geoname_ids jsonb, append_emoji integer)
-RETURNS TABLE($(pg_ident ord) integer, $(pg_ident geoname_id) integer, $(pg_ident location_mix) text, $(pg_ident location_mix_iso) text)
+CREATE OR REPLACE FUNCTION $(pg_ident build_location_labels_by_json_geoname_ids)(
+    p_geoname_ids jsonb,
+    locale_param text,
+    include_continent integer,
+    include_iso_code integer,
+    include_emoji integer,
+    p_page integer,
+    p_per_page integer
+)
+RETURNS TABLE($(pg_ident ord) integer, $(pg_ident total_count) bigint, $(pg_ident geoname_id) integer, $(pg_ident status) text, $(pg_ident location_label) text)
 LANGUAGE sql
 STABLE
 $(pg_routine_search_path_clause)
 AS \$\$
-WITH input AS (
+WITH raw_input AS (
     SELECT item.$(ident ord)::integer AS $(ident ord),
-           item.$(ident geoname_id)::integer AS $(ident geoname_id)
-    FROM jsonb_array_elements_text(p_geoname_ids) WITH ORDINALITY AS item($(ident geoname_id), $(ident ord))
+           jsonb_array_length(p_geoname_ids)::bigint AS $(ident total_count),
+           CASE
+             WHEN jsonb_typeof(item.$(ident value)) IN ('number', 'string')
+             THEN item.$(ident value) #>> '{}'
+           END AS $(ident value)
+    FROM jsonb_array_elements(COALESCE(p_geoname_ids, 'null'::jsonb)) WITH ORDINALITY AS item($(ident value), $(ident ord))
+    ORDER BY item.$(ident ord)
+    LIMIT p_per_page OFFSET $(pg_ident _batch_page_offset)(p_page, p_per_page)
+), input AS (
+    SELECT r.$(ident ord), r.$(ident total_count),
+           CASE
+             WHEN r.$(ident value) ~ '^[0-9]+\$'
+              AND pg_input_is_valid(r.$(ident value), 'integer')
+             THEN CASE
+                    WHEN r.$(ident value)::integer > 0 THEN r.$(ident value)::integer
+                  END
+           END AS $(ident geoname_id)
+    FROM raw_input r
 )
 SELECT i.$(ident ord),
+       i.$(ident total_count),
        i.$(ident geoname_id),
-       $mix_select AS $(ident location_mix),
-       $iso_select AS $(ident location_mix_iso)
+       CASE
+         WHEN i.$(ident geoname_id) IS NULL THEN 'invalid_geoname_id'
+         WHEN EXISTS (
+             SELECT 1
+             FROM $(pg_ident "$location_entity_table") entity
+             WHERE entity.$(pg_ident geoname_id) = i.$(pg_ident geoname_id)
+         ) THEN 'ok'
+         ELSE 'not_found'
+       END AS $(ident status),
+       $(pg_ident build_location_label_by_geoname_id)(i.$(pg_ident geoname_id), locale_param, include_continent, include_iso_code, include_emoji) AS $(ident location_label)
 FROM input i
 ORDER BY i.$(ident ord);
+\$\$;
+
+SQL
+  else
+    cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_geoname_ids_json)(jsonb, text, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_geoname_ids_json)(jsonb, text, integer, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_json_geoname_ids)(jsonb, text, integer, integer, integer, integer, integer);
+-- build_location_labels_by_json_geoname_ids was not generated because no configured location label columns can be returned.
+
+SQL
+  fi
+}
+
+write_mysql_location_labels_network_lookup() {
+  local file="$1"
+  local table="$2"
+  local value_var="$3"
+  shift 3
+  local roles=("$@")
+  local role candidate_role_selects="" inner_role_selects="" into_role_vars=""
+  for role in "${roles[@]}"; do
+    candidate_role_selects+=$',\n'"               candidate.$(ident "$role") AS $(ident "$role")"
+    into_role_vars+=$',\n'"             v_$role"
+    if column_enabled "$table" "$role"; then
+      inner_role_selects+=$',\n'"                   b.$(ident "$role") AS $(ident "$role")"
+    else
+      inner_role_selects+=$',\n'"                   NULL AS $(ident "$role")"
+    fi
+  done
+  cat >> "$file" <<SQL
+        SELECT candidate.$(ident network), candidate.$(ident e_geoname_id), candidate.$(ident e_geoname_source_code)$candidate_role_selects
+        INTO v_network, v_e_geoname_id, v_e_geoname_source_code$into_role_vars
+        FROM (SELECT 1 AS $(ident seed)) seed
+        LEFT JOIN (
+            SELECT b.$(ident network), b.$(ident e_geoname_id), b.$(ident e_geoname_source_code)$inner_role_selects,
+                   b.$(ident last_ip) AS $(ident __last_ip)
+            FROM $(ident "$table") b
+            WHERE b.$(ident start_ip) <= $value_var
+            ORDER BY b.$(ident start_ip) DESC
+            LIMIT 1
+        ) candidate ON candidate.$(ident __last_ip) >= $value_var;
+SQL
+}
+
+write_mysql_location_labels_by_ip_procedure() {
+  local file="$1"
+  local definer="$2"
+  local has4="$3"
+  local has6="$4"
+  local role label_column output_role_selects=""
+  local roles=()
+  mapfile -t roles < <(enabled_geoname_role_columns)
+  for role in "${roles[@]}"; do
+    label_column="$(geoname_role_label_column "$role")"
+    output_role_selects+=$',\n'"            v_$role AS $(ident "$role"),"
+    output_role_selects+=$'\n'"            CASE WHEN l.$(ident locale) IS NOT NULL THEN $(mysql_ident build_location_label_by_geoname_id)(v_$role, l.$(ident locale), include_continent, include_iso_code, include_emoji) END AS $(ident "$label_column")"
+  done
+  cat >> "$file" <<SQL
+DROP PROCEDURE IF EXISTS $(mysql_ident build_location_labels_by_ip)\$\$
+CREATE ${definer}PROCEDURE $(mysql_ident build_location_labels_by_ip)(
+    ip_param VARCHAR(45),
+    locales_json JSON,
+    include_continent INT UNSIGNED,
+    include_iso_code INT UNSIGNED,
+    include_emoji INT UNSIGNED
+)
+    READS SQL DATA
+    SQL SECURITY INVOKER
+BEGIN
+    DECLARE v_status VARCHAR(16) DEFAULT 'invalid_ip';
+    DECLARE v_ip_version TINYINT UNSIGNED DEFAULT NULL;
+    DECLARE v_network VARCHAR(43) DEFAULT NULL;
+    DECLARE v_e_geoname_id INT UNSIGNED DEFAULT NULL;
+    DECLARE v_e_geoname_source_code TINYINT UNSIGNED DEFAULT NULL;
+SQL
+  for role in "${roles[@]}"; do
+    echo "    DECLARE v_$role INT UNSIGNED DEFAULT NULL;" >> "$file"
+  done
+  [[ "$has4" == "true" ]] && echo "    DECLARE v_ip4 INT UNSIGNED DEFAULT NULL;" >> "$file"
+  [[ "$has6" == "true" ]] && echo "    DECLARE v_ip6 DECIMAL(39,0) DEFAULT NULL;" >> "$file"
+  cat >> "$file" <<SQL
+
+    IF locales_json IS NULL OR JSON_TYPE(locales_json) <> 'ARRAY' THEN
+        SIGNAL SQLSTATE '22032' SET MESSAGE_TEXT = 'locales_json must be a JSON array';
+    END IF;
+    IF include_continent IS NULL OR include_continent NOT IN (0, 1)
+       OR include_iso_code IS NULL OR include_iso_code NOT IN (0, 1)
+       OR include_emoji IS NULL OR include_emoji NOT IN (0, 1) THEN
+        SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = 'include flags must be 0 or 1';
+    END IF;
+
+    IF IS_IPV6(ip_param) = 1 THEN
+        SET v_ip_version = 6;
+        SET v_status = 'not_found';
+SQL
+  if [[ "$has6" == "true" ]]; then
+    cat >> "$file" <<SQL
+        SET v_ip6 = $(mysql_ident inet6_aton_decimal)(ip_param);
+SQL
+    write_mysql_location_labels_network_lookup "$file" ipv6 v_ip6 "${roles[@]}"
+  fi
+  cat >> "$file" <<SQL
+    ELSEIF IS_IPV4(ip_param) = 1 THEN
+        SET v_ip_version = 4;
+        SET v_status = 'not_found';
+SQL
+  if [[ "$has4" == "true" ]]; then
+    cat >> "$file" <<SQL
+        SET v_ip4 = INET_ATON(ip_param);
+SQL
+    write_mysql_location_labels_network_lookup "$file" ipv4 v_ip4 "${roles[@]}"
+  fi
+  cat >> "$file" <<SQL
+    END IF;
+
+    IF v_network IS NOT NULL THEN
+        SET v_status = CASE WHEN v_e_geoname_id IS NULL THEN 'no_location' ELSE 'ok' END;
+    END IF;
+
+    WITH raw_locales AS (
+        SELECT CAST(j.$(ident ord) AS UNSIGNED) AS $(ident ord),
+               JSON_EXTRACT(locales_json, CONCAT('\$[', j.$(ident ord) - 1, ']')) AS $(ident value)
+        FROM JSON_TABLE(locales_json, '\$[*]' COLUMNS ($(ident ord) FOR ORDINALITY)) AS j
+    ), locales AS (
+        SELECT r.$(ident ord),
+               CASE WHEN JSON_TYPE(r.$(ident value)) = 'STRING'
+                    THEN NULLIF(LOWER(REPLACE(TRIM(BOTH '"' FROM TRIM(JSON_UNQUOTE(r.$(ident value)))), '_', '-')), '')
+               END AS $(ident locale)
+        FROM raw_locales r
+    )
+    SELECT l.$(ident ord), l.$(ident locale),
+           CASE WHEN l.$(ident locale) IS NULL THEN 'invalid_locale' ELSE v_status END AS $(ident status),
+           ip_param AS $(ident ip), v_ip_version AS $(ident ip_version), v_network AS $(ident network),
+           v_e_geoname_id AS $(ident e_geoname_id),
+           CASE v_e_geoname_source_code
+             WHEN 1 THEN 'geoname_id'
+             WHEN 2 THEN 'registered_country_geoname_id'
+             WHEN 3 THEN 'represented_country_geoname_id'
+           END AS $(ident e_geoname_source),
+           CASE WHEN l.$(ident locale) IS NOT NULL THEN $(mysql_ident build_location_label_by_geoname_id)(v_e_geoname_id, l.$(ident locale), include_continent, include_iso_code, include_emoji) END AS $(ident e_geoname_label)$output_role_selects
+    FROM locales l
+    ORDER BY l.$(ident ord);
+END\$\$
+
+SQL
+}
+
+write_pg_location_labels_by_ip_function() {
+  local file="$1"
+  local role label_column return_role_columns="" select_role_columns=""
+  local roles=()
+  mapfile -t roles < <(enabled_geoname_role_columns)
+  for role in "${roles[@]}"; do
+    label_column="$(geoname_role_label_column "$role")"
+    return_role_columns+=$',\n'"    $(pg_ident "$role") integer,"
+    return_role_columns+=$'\n'"    $(pg_ident "$label_column") text"
+    select_role_columns+=$',\n'"           n.$(ident "$role") AS $(ident "$role"),"
+    select_role_columns+=$'\n'"           CASE WHEN l.$(ident locale) IS NOT NULL THEN $(pg_ident build_location_label_by_geoname_id)(n.$(ident "$role"), l.$(ident locale), include_continent, include_iso_code, include_emoji) END AS $(ident "$label_column")"
+  done
+  cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_ip)(text, jsonb, integer, integer, integer);
+
+CREATE OR REPLACE FUNCTION $(pg_ident build_location_labels_by_ip)(
+    p_ip text,
+    p_locales jsonb,
+    include_continent integer,
+    include_iso_code integer,
+    include_emoji integer
+)
+RETURNS TABLE(
+    $(pg_ident ord) integer,
+    $(pg_ident locale) text,
+    $(pg_ident status) text,
+    $(pg_ident ip) text,
+    $(pg_ident ip_version) integer,
+    $(pg_ident network) cidr,
+    $(pg_ident e_geoname_id) integer,
+    $(pg_ident e_geoname_source) text,
+    $(pg_ident e_geoname_label) text$return_role_columns
+)
+LANGUAGE plpgsql
+STABLE
+$(pg_routine_search_path_clause)
+AS \$\$
+BEGIN
+    IF p_locales IS NULL OR jsonb_typeof(p_locales) <> 'array' THEN
+        RAISE EXCEPTION 'locales_json must be a JSON array' USING ERRCODE = '22032';
+    END IF;
+    IF include_continent IS NULL OR include_continent NOT IN (0, 1)
+       OR include_iso_code IS NULL OR include_iso_code NOT IN (0, 1)
+       OR include_emoji IS NULL OR include_emoji NOT IN (0, 1) THEN
+        RAISE EXCEPTION 'include flags must be 0 or 1' USING ERRCODE = '22023';
+    END IF;
+
+    RETURN QUERY
+    WITH network_row AS MATERIALIZED (
+        SELECT n.* FROM $(pg_ident find_geoname_ids_by_ip)(p_ip) n
+    ), raw_locales AS (
+        SELECT item.$(ident ord)::integer AS $(ident ord),
+               CASE WHEN jsonb_typeof(item.$(ident value)) = 'string'
+                    THEN NULLIF(lower(replace(btrim(btrim(item.$(ident value) #>> '{}'), '"'), '_', '-')), '')
+               END AS $(ident locale)
+        FROM jsonb_array_elements(p_locales) WITH ORDINALITY AS item($(ident value), $(ident ord))
+    )
+    SELECT l.$(ident ord), l.$(ident locale),
+           CASE WHEN l.$(ident locale) IS NULL THEN 'invalid_locale' ELSE n.$(ident status) END AS $(ident status),
+           n.$(ident ip), n.$(ident ip_version), n.$(ident network),
+           n.$(ident e_geoname_id), n.$(ident e_geoname_source),
+           CASE WHEN l.$(ident locale) IS NOT NULL THEN $(pg_ident build_location_label_by_geoname_id)(n.$(ident e_geoname_id), l.$(ident locale), include_continent, include_iso_code, include_emoji) END AS $(ident e_geoname_label)$select_role_columns
+    FROM raw_locales l
+    CROSS JOIN network_row n
+    ORDER BY l.$(ident ord);
+END;
+\$\$;
+
+SQL
+}
+
+write_mysql_dataset_metadata_procedure() {
+  local file="$1"
+  local definer="$2"
+  cat >> "$file" <<SQL
+DELIMITER \$\$
+DROP PROCEDURE IF EXISTS $(mysql_ident get_dataset_metadata)\$\$
+CREATE ${definer}PROCEDURE $(mysql_ident get_dataset_metadata)()
+    READS SQL DATA
+    SQL SECURITY INVOKER
+BEGIN
+    SELECT $(mysql_ident run_id), $(mysql_ident edition_id), $(mysql_ident archive_root), $(mysql_ident source_build_date),
+           $(mysql_ident imported_at), $(mysql_ident converter_version), $(mysql_ident schema_version), $(mysql_ident dbms),
+           $(mysql_ident project_name), $(mysql_ident schema_name), $(mysql_ident ip_versions), $(mysql_ident selected_locales),
+           $(mysql_ident loaded_locales), $(mysql_ident e_geoname_id_priority_columns)
+    FROM $(mysql_ident dataset_metadata);
+END\$\$
+DELIMITER ;
+
+SQL
+}
+
+write_pg_dataset_metadata_function() {
+  local file="$1"
+  cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident get_dataset_metadata)();
+
+CREATE OR REPLACE FUNCTION $(pg_ident get_dataset_metadata)()
+RETURNS TABLE(
+    $(pg_ident run_id) varchar(64),
+    $(pg_ident edition_id) varchar(64),
+    $(pg_ident archive_root) varchar(255),
+    $(pg_ident source_build_date) date,
+    $(pg_ident imported_at) timestamptz,
+    $(pg_ident converter_version) varchar(32),
+    $(pg_ident schema_version) integer,
+    $(pg_ident dbms) varchar(16),
+    $(pg_ident project_name) varchar(128),
+    $(pg_ident schema_name) varchar(128),
+    $(pg_ident ip_versions) jsonb,
+    $(pg_ident selected_locales) jsonb,
+    $(pg_ident loaded_locales) jsonb,
+    $(pg_ident e_geoname_id_priority_columns) jsonb
+)
+LANGUAGE sql
+STABLE
+$(pg_routine_search_path_clause)
+AS \$\$
+SELECT m.$(pg_ident run_id), m.$(pg_ident edition_id), m.$(pg_ident archive_root), m.$(pg_ident source_build_date),
+       m.$(pg_ident imported_at), m.$(pg_ident converter_version), m.$(pg_ident schema_version), m.$(pg_ident dbms),
+       m.$(pg_ident project_name), m.$(pg_ident schema_name), m.$(pg_ident ip_versions), m.$(pg_ident selected_locales),
+       m.$(pg_ident loaded_locales), m.$(pg_ident e_geoname_id_priority_columns)
+FROM $(pg_ident dataset_metadata) m;
+\$\$;
+
+SQL
+}
+
+write_mysql_original_geoname_id_function() {
+  local file="$1"
+  local definer="$2"
+  local has4="$3"
+  local has6="$4"
+  cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(mysql_ident find_geoname_id_by_ip)\$\$
+CREATE ${definer}FUNCTION $(mysql_ident find_geoname_id_by_ip)(ip VARCHAR(45)) RETURNS INT UNSIGNED
+    READS SQL DATA
+    DETERMINISTIC
+    SQL SECURITY INVOKER
+BEGIN
+    DECLARE result INT UNSIGNED DEFAULT NULL;
+SQL
+  [[ "$has6" == "true" ]] && echo "    DECLARE ip6 DECIMAL(39,0) DEFAULT NULL;" >> "$file"
+  [[ "$has4" == "true" ]] && echo "    DECLARE ip4 INT UNSIGNED DEFAULT NULL;" >> "$file"
+  if [[ "$has6" == "true" ]]; then
+    cat >> "$file" <<SQL
+    IF IS_IPV6(ip) = 1 THEN
+        SET ip6 = $(mysql_ident inet6_aton_decimal)(ip);
+        SELECT candidate.$(mysql_ident geoname_id) INTO result
+        FROM (SELECT $(mysql_ident geoname_id), $(mysql_ident last_ip) FROM $(mysql_ident ipv6) WHERE $(mysql_ident start_ip) <= ip6 ORDER BY $(mysql_ident start_ip) DESC LIMIT 1) AS candidate
+        WHERE candidate.$(mysql_ident last_ip) >= ip6;
+        RETURN result;
+    END IF;
+SQL
+  fi
+  if [[ "$has4" == "true" ]]; then
+    cat >> "$file" <<SQL
+    IF IS_IPV4(ip) = 0 THEN RETURN NULL; END IF;
+    SET ip4 = INET_ATON(ip);
+    SELECT candidate.$(mysql_ident geoname_id) INTO result
+    FROM (SELECT $(mysql_ident geoname_id), $(mysql_ident last_ip) FROM $(mysql_ident ipv4) WHERE $(mysql_ident start_ip) <= ip4 ORDER BY $(mysql_ident start_ip) DESC LIMIT 1) AS candidate
+    WHERE candidate.$(mysql_ident last_ip) >= ip4;
+    RETURN result;
+SQL
+  else
+    echo "    RETURN NULL;" >> "$file"
+  fi
+  cat >> "$file" <<SQL
+END\$\$
+
+SQL
+}
+
+write_pg_original_geoname_id_function() {
+  local file="$1"
+  local has4="$2"
+  local has6="$3"
+  cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident find_geoname_id_by_ip)(text);
+
+CREATE OR REPLACE FUNCTION $(pg_ident find_geoname_id_by_ip)(p_ip text)
+RETURNS integer
+LANGUAGE plpgsql
+STABLE
+$(pg_routine_search_path_clause)
+AS \$\$
+DECLARE
+    v_ip inet;
+    result integer;
+BEGIN
+    IF p_ip IS NULL OR position('/' in p_ip) > 0 OR NOT pg_input_is_valid(p_ip, 'inet') THEN
+        RETURN NULL;
+    END IF;
+    v_ip := p_ip::inet;
+SQL
+  if [[ "$has4" == "true" ]]; then
+    cat >> "$file" <<SQL
+    IF family(v_ip) = 4 THEN
+        SELECT candidate.$(pg_ident geoname_id) INTO result
+        FROM (SELECT $(pg_ident geoname_id), $(pg_ident last_ip) FROM $(pg_ident ipv4) WHERE $(pg_ident start_ip) <= v_ip ORDER BY $(pg_ident start_ip) DESC LIMIT 1) AS candidate
+        WHERE candidate.$(pg_ident last_ip) >= v_ip;
+        RETURN result;
+    END IF;
+SQL
+  fi
+  if [[ "$has6" == "true" ]]; then
+    cat >> "$file" <<SQL
+    IF family(v_ip) = 6 THEN
+        SELECT candidate.$(pg_ident geoname_id) INTO result
+        FROM (SELECT $(pg_ident geoname_id), $(pg_ident last_ip) FROM $(pg_ident ipv6) WHERE $(pg_ident start_ip) <= v_ip ORDER BY $(pg_ident start_ip) DESC LIMIT 1) AS candidate
+        WHERE candidate.$(pg_ident last_ip) >= v_ip;
+        RETURN result;
+    END IF;
+SQL
+  fi
+  cat >> "$file" <<SQL
+    RETURN NULL;
+END;
 \$\$;
 
 SQL
@@ -3464,39 +4447,72 @@ SQL
 
 write_99_routines() {
   local file="$RUN_DIR/99_routines.sql"
-  local definer="" has4=false has6=false locale return_cols routine_names routine_exprs routine_types i
+  local definer="" has4=false has6=false has_geoname4=false has_geoname6=false locale return_cols routine_names routine_exprs routine_types i
   array_contains "4" "${IP_VERSIONS[@]}" && has4=true
   array_contains "6" "${IP_VERSIONS[@]}" && has6=true
+  [[ "$has4" == "true" ]] && column_enabled ipv4 geoname_id && has_geoname4=true
+  [[ "$has6" == "true" ]] && column_enabled ipv6 geoname_id && has_geoname6=true
   start_sql_file "$file" "IP lookup helper functions and procedures"
   if ! is_location_family; then
     if [[ "$DBMS" == "mysql" ]]; then
       [[ -n "$MYSQL_ROUTINE_DEFINER" ]] && definer="DEFINER=$MYSQL_ROUTINE_DEFINER "
-      if [[ "$has6" == "true" ]]; then
-        write_mysql_inet6_function "$file"
-      fi
+      write_mysql_inet6_function "$file"
+      write_mysql_dataset_metadata_procedure "$file" "$definer"
       cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(mysql_ident find_effective_geoname_id_by_ip);
+DROP FUNCTION IF EXISTS $(mysql_ident find_e_geoname_id_by_ip);
 DROP FUNCTION IF EXISTS $(mysql_ident find_geoname_id_by_ip);
+DROP PROCEDURE IF EXISTS $(mysql_ident find_ip_geoname_ids_by_ip);
+DROP PROCEDURE IF EXISTS $(mysql_ident find_ip_geoname_ids_by_ips_json);
+DROP PROCEDURE IF EXISTS $(mysql_ident find_geoname_ids_by_ip);
+DROP PROCEDURE IF EXISTS $(mysql_ident find_geoname_ids_by_json_ips);
 DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_ip);
-DROP PROCEDURE IF EXISTS $(mysql_ident find_geoname_ids_by_ips_json);
+DROP PROCEDURE IF EXISTS $(mysql_ident find_effective_geoname_ids_by_ips_json);
+DROP PROCEDURE IF EXISTS $(mysql_ident find_e_geoname_ids_by_json_ips);
 DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_ips_json);
 DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_geoname_ids_json);
-DROP PROCEDURE IF EXISTS $(mysql_ident build_location_mixes_by_geoname_ids_json);
-DROP FUNCTION IF EXISTS $(mysql_ident build_location_mix);
-DROP FUNCTION IF EXISTS $(mysql_ident build_location_mix_with_iso_code);
+DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_json_ips);
+DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_json_geoname_ids);
+DROP PROCEDURE IF EXISTS $(mysql_ident build_location_labels_by_geoname_ids_json);
+DROP PROCEDURE IF EXISTS $(mysql_ident build_location_labels_by_ip);
+DROP PROCEDURE IF EXISTS $(mysql_ident build_location_labels_by_json_geoname_ids);
+DROP FUNCTION IF EXISTS $(mysql_ident build_location_label);
+DROP FUNCTION IF EXISTS $(mysql_ident build_location_label_by_geoname_id);
 
 SQL
       write_mysql_network_lookup_procedure "$file" "$definer" "$has4" "$has6"
       write_mysql_network_lookup_batch_procedure "$file" "$definer" "$has4" "$has6"
     else
+      write_pg_dataset_metadata_function "$file"
+      write_pg_routine_precleanup "$file"
+      write_pg_batch_page_offset_function "$file"
       cat >> "$file" <<SQL
+DROP FUNCTION IF EXISTS $(pg_ident find_effective_geoname_id_by_ip)(text);
+DROP FUNCTION IF EXISTS $(pg_ident find_e_geoname_id_by_ip)(text);
 DROP FUNCTION IF EXISTS $(pg_ident find_geoname_id_by_ip)(text);
+DROP FUNCTION IF EXISTS $(pg_ident find_ip_geoname_ids_by_ip)(text);
+DROP FUNCTION IF EXISTS $(pg_ident find_ip_geoname_ids_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_ip_geoname_ids_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoname_ids_by_ip)(text);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoname_ids_by_json_ips)(jsonb, integer, integer);
 DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_ip)(text);
-DROP FUNCTION IF EXISTS $(pg_ident find_geoname_ids_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_effective_geoname_ids_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_effective_geoname_ids_by_ips_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_e_geoname_ids_by_json_ips)(jsonb, integer, integer);
 DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_ips_json)(jsonb);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_ips_json)(jsonb, integer);
 DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_geoname_ids_json)(jsonb);
-DROP FUNCTION IF EXISTS $(pg_ident build_location_mixes_by_geoname_ids_json)(jsonb, integer);
-DROP FUNCTION IF EXISTS $(pg_ident build_location_mix)(integer, integer);
-DROP FUNCTION IF EXISTS $(pg_ident build_location_mix_with_iso_code)(integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_geoname_ids_json)(jsonb, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_ips)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_geoname_ids)(jsonb, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_ips)(jsonb, integer, integer, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_json_geoname_ids)(jsonb, integer, integer, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_geoname_ids_json)(jsonb, text, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_geoname_ids_json)(jsonb, text, integer, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_ip)(text, jsonb, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_labels_by_json_geoname_ids)(jsonb, text, integer, integer, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_label)(integer, text, integer, integer, integer);
+DROP FUNCTION IF EXISTS $(pg_ident build_location_label_by_geoname_id)(integer, text, integer, integer, integer);
 
 SQL
       write_pg_network_lookup_function "$file" "$has4" "$has6"
@@ -3509,17 +4525,20 @@ SQL
   fi
   if [[ "$DBMS" == "mysql" ]]; then
     [[ -n "$MYSQL_ROUTINE_DEFINER" ]] && definer="DEFINER=$MYSQL_ROUTINE_DEFINER "
-    if [[ "$has6" == "true" ]]; then
-      write_mysql_inet6_function "$file"
-    fi
+    write_mysql_inet6_function "$file"
+    write_mysql_dataset_metadata_procedure "$file" "$definer"
     write_mysql_network_lookup_procedure "$file" "$definer" "$has4" "$has6"
     write_mysql_network_lookup_batch_procedure "$file" "$definer" "$has4" "$has6"
+    write_mysql_ip_geoname_lookup_procedure "$file" "$definer" "$has4" "$has6"
+    write_mysql_ip_geoname_lookup_batch_procedure "$file" "$definer" "$has4" "$has6"
     cat >> "$file" <<SQL
 DELIMITER \$\$
-DROP FUNCTION IF EXISTS $(mysql_ident find_geoname_id_by_ip)\$\$
-CREATE ${definer}FUNCTION $(mysql_ident find_geoname_id_by_ip)(ip VARCHAR(45)) RETURNS INT UNSIGNED
+DROP FUNCTION IF EXISTS $(mysql_ident find_effective_geoname_id_by_ip)\$\$
+DROP FUNCTION IF EXISTS $(mysql_ident find_e_geoname_id_by_ip)\$\$
+CREATE ${definer}FUNCTION $(mysql_ident find_e_geoname_id_by_ip)(ip VARCHAR(45)) RETURNS INT UNSIGNED
     READS SQL DATA
     DETERMINISTIC
+    SQL SECURITY INVOKER
 BEGIN
     DECLARE result INT UNSIGNED DEFAULT NULL;
 SQL
@@ -3527,11 +4546,11 @@ SQL
     [[ "$has4" == "true" ]] && echo "    DECLARE ip4 INT UNSIGNED DEFAULT NULL;" >> "$file"
     if [[ "$has6" == "true" ]]; then
       cat >> "$file" <<SQL
-    IF INSTR(ip, ':') > 0 THEN
+    IF IS_IPV6(ip) = 1 THEN
         SET ip6 = $(mysql_ident inet6_aton_decimal)(ip);
         IF ip6 IS NULL THEN RETURN NULL; END IF;
-        SELECT candidate.$(mysql_ident v_geoname_id) INTO result
-        FROM (SELECT $(mysql_ident v_geoname_id), $(mysql_ident last_ip) FROM $(mysql_ident ipv6) WHERE $(mysql_ident start_ip) <= ip6 ORDER BY $(mysql_ident start_ip) DESC LIMIT 1) AS candidate
+        SELECT candidate.$(mysql_ident e_geoname_id) INTO result
+        FROM (SELECT $(mysql_ident e_geoname_id), $(mysql_ident last_ip) FROM $(mysql_ident ipv6) WHERE $(mysql_ident start_ip) <= ip6 ORDER BY $(mysql_ident start_ip) DESC LIMIT 1) AS candidate
         WHERE candidate.$(mysql_ident last_ip) >= ip6;
         RETURN result;
     END IF;
@@ -3539,10 +4558,10 @@ SQL
     fi
     if [[ "$has4" == "true" ]]; then
       cat >> "$file" <<SQL
+    IF IS_IPV4(ip) = 0 THEN RETURN NULL; END IF;
     SET ip4 = INET_ATON(ip);
-    IF ip4 IS NULL THEN RETURN NULL; END IF;
-    SELECT candidate.$(mysql_ident v_geoname_id) INTO result
-    FROM (SELECT $(mysql_ident v_geoname_id), $(mysql_ident last_ip) FROM $(mysql_ident ipv4) WHERE $(mysql_ident start_ip) <= ip4 ORDER BY $(mysql_ident start_ip) DESC LIMIT 1) AS candidate
+    SELECT candidate.$(mysql_ident e_geoname_id) INTO result
+    FROM (SELECT $(mysql_ident e_geoname_id), $(mysql_ident last_ip) FROM $(mysql_ident ipv4) WHERE $(mysql_ident start_ip) <= ip4 ORDER BY $(mysql_ident start_ip) DESC LIMIT 1) AS candidate
     WHERE candidate.$(mysql_ident last_ip) >= ip4;
     RETURN result;
 SQL
@@ -3551,52 +4570,43 @@ SQL
     fi
     echo "END\$\$" >> "$file"
     echo >> "$file"
-    routine_select_parts routine_names routine_exprs routine_types
-    if [[ "${#routine_names[@]}" -eq 0 ]]; then
-      cat >> "$file" <<SQL
+    if [[ "$has_geoname4" == "true" || "$has_geoname6" == "true" ]]; then
+      write_mysql_original_geoname_id_function "$file" "$definer" "$has_geoname4" "$has_geoname6"
+    else
+      echo "DROP FUNCTION IF EXISTS $(mysql_ident find_geoname_id_by_ip)\$\$" >> "$file"
+      echo "-- find_geoname_id_by_ip was not generated because geoname_id is disabled for every selected IP family." >> "$file"
+      echo >> "$file"
+    fi
+    cat >> "$file" <<SQL
 DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_ip)\$\$
 
--- find_geoinfo_by_ip was not generated because no configured output columns can be returned.
 SQL
+    write_mysql_build_location_functions "$file" "$definer"
+    if [[ -n "$(location_label_expr locale_param include_continent include_iso_code include_emoji)" ]]; then
+      write_mysql_location_labels_by_ip_procedure "$file" "$definer" "$has4" "$has6"
     else
       cat >> "$file" <<SQL
-DROP PROCEDURE IF EXISTS $(mysql_ident find_geoinfo_by_ip)\$\$
-CREATE ${definer}PROCEDURE $(mysql_ident find_geoinfo_by_ip)(ip VARCHAR(45))
-    READS SQL DATA
-BEGIN
-    SELECT
+DROP PROCEDURE IF EXISTS $(mysql_ident build_location_labels_by_ip)\$\$
+-- build_location_labels_by_ip was not generated because no configured location label columns can be returned.
+
 SQL
-      for ((i = 0; i < ${#routine_names[@]}; i++)); do
-        if (( i == 0 )); then
-          printf "        %s AS %s\n" "${routine_exprs[i]}" "$(mysql_ident "${routine_names[i]}")" >> "$file"
-        else
-          printf "        , %s AS %s\n" "${routine_exprs[i]}" "$(mysql_ident "${routine_names[i]}")" >> "$file"
-        fi
-      done
-      if is_city_location; then
-        write_geoname_lookup_from_sql "$file" "    "
-        cat >> "$file" <<SQL
-    WHERE ci.$(mysql_ident geoname_id) = $(mysql_ident find_geoname_id_by_ip)(ip);
-END\$\$
-SQL
-      else
-        write_geoname_lookup_from_sql "$file" "    "
-        cat >> "$file" <<SQL
-    WHERE c.$(mysql_ident geoname_id) = $(mysql_ident find_geoname_id_by_ip)(ip);
-END\$\$
-SQL
-      fi
     fi
-    write_mysql_build_location_functions "$file" "$definer"
     write_mysql_location_batch_procedures "$file" "$definer"
     echo "DELIMITER ;" >> "$file"
   else
+    write_pg_dataset_metadata_function "$file"
+    write_pg_routine_precleanup "$file"
+    write_pg_batch_page_offset_function "$file"
     write_pg_network_lookup_function "$file" "$has4" "$has6"
     write_pg_network_lookup_family_functions "$file" "$has4" "$has6"
     write_pg_network_lookup_batch_function "$file" "$has4" "$has6"
     write_pg_network_lookup_batch_family_functions "$file" "$has4" "$has6"
+    write_pg_ip_geoname_lookup_functions "$file"
     cat >> "$file" <<SQL
-CREATE OR REPLACE FUNCTION $(pg_ident find_geoname_id_by_ip)(p_ip text)
+DROP FUNCTION IF EXISTS $(pg_ident find_effective_geoname_id_by_ip)(text);
+DROP FUNCTION IF EXISTS $(pg_ident find_e_geoname_id_by_ip)(text);
+
+CREATE OR REPLACE FUNCTION $(pg_ident find_e_geoname_id_by_ip)(p_ip text)
 RETURNS integer
 LANGUAGE plpgsql
 STABLE
@@ -3606,13 +4616,16 @@ DECLARE
     v_ip inet;
     result integer;
 BEGIN
+    IF p_ip IS NULL OR position('/' in p_ip) > 0 OR NOT pg_input_is_valid(p_ip, 'inet') THEN
+        RETURN NULL;
+    END IF;
     v_ip := p_ip::inet;
 SQL
     if [[ "$has4" == "true" ]]; then
       cat >> "$file" <<SQL
     IF family(v_ip) = 4 THEN
-        SELECT candidate.$(pg_ident v_geoname_id) INTO result
-        FROM (SELECT $(pg_ident v_geoname_id), $(pg_ident last_ip) FROM $(pg_ident ipv4) WHERE $(pg_ident start_ip) <= v_ip ORDER BY $(pg_ident start_ip) DESC LIMIT 1) AS candidate
+        SELECT candidate.$(pg_ident e_geoname_id) INTO result
+        FROM (SELECT $(pg_ident e_geoname_id), $(pg_ident last_ip) FROM $(pg_ident ipv4) WHERE $(pg_ident start_ip) <= v_ip ORDER BY $(pg_ident start_ip) DESC LIMIT 1) AS candidate
         WHERE candidate.$(pg_ident last_ip) >= v_ip;
         RETURN result;
     END IF;
@@ -3621,8 +4634,8 @@ SQL
     if [[ "$has6" == "true" ]]; then
       cat >> "$file" <<SQL
     IF family(v_ip) = 6 THEN
-        SELECT candidate.$(pg_ident v_geoname_id) INTO result
-        FROM (SELECT $(pg_ident v_geoname_id), $(pg_ident last_ip) FROM $(pg_ident ipv6) WHERE $(pg_ident start_ip) <= v_ip ORDER BY $(pg_ident start_ip) DESC LIMIT 1) AS candidate
+        SELECT candidate.$(pg_ident e_geoname_id) INTO result
+        FROM (SELECT $(pg_ident e_geoname_id), $(pg_ident last_ip) FROM $(pg_ident ipv6) WHERE $(pg_ident start_ip) <= v_ip ORDER BY $(pg_ident start_ip) DESC LIMIT 1) AS candidate
         WHERE candidate.$(pg_ident last_ip) >= v_ip;
         RETURN result;
     END IF;
@@ -3634,51 +4647,24 @@ END;
 \$\$;
 
 SQL
-    routine_select_parts routine_names routine_exprs routine_types
-    if [[ "${#routine_names[@]}" -eq 0 ]]; then
-      cat >> "$file" <<SQL
-DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_ip)(text);
-
--- find_geoinfo_by_ip was not generated because no configured output columns can be returned.
-SQL
+    if [[ "$has_geoname4" == "true" || "$has_geoname6" == "true" ]]; then
+      write_pg_original_geoname_id_function "$file" "$has_geoname4" "$has_geoname6"
     else
-      return_cols=""
-      for ((i = 0; i < ${#routine_names[@]}; i++)); do
-        return_cols="${return_cols}${return_cols:+, }$(pg_ident "${routine_names[i]}") ${routine_types[i]}"
-      done
-      cat >> "$file" <<SQL
+      echo "DROP FUNCTION IF EXISTS $(pg_ident find_geoname_id_by_ip)(text);" >> "$file"
+      echo "-- find_geoname_id_by_ip was not generated because geoname_id is disabled for every selected IP family." >> "$file"
+      echo >> "$file"
+    fi
+    cat >> "$file" <<SQL
 DROP FUNCTION IF EXISTS $(pg_ident find_geoinfo_by_ip)(text);
 
-CREATE OR REPLACE FUNCTION $(pg_ident find_geoinfo_by_ip)(p_ip text)
-RETURNS TABLE($return_cols)
-LANGUAGE sql
-STABLE
-$(pg_routine_search_path_clause)
-AS \$\$
-SELECT
 SQL
-      for ((i = 0; i < ${#routine_names[@]}; i++)); do
-        if (( i == 0 )); then
-          printf "    %s AS %s\n" "${routine_exprs[i]}" "$(pg_ident "${routine_names[i]}")" >> "$file"
-        else
-          printf "    , %s AS %s\n" "${routine_exprs[i]}" "$(pg_ident "${routine_names[i]}")" >> "$file"
-        fi
-      done
-      if is_city_location; then
-        write_geoname_lookup_from_sql "$file" ""
-        cat >> "$file" <<SQL
-WHERE ci.$(pg_ident geoname_id) = $(pg_ident find_geoname_id_by_ip)(p_ip);
-\$\$;
-SQL
-      else
-        write_geoname_lookup_from_sql "$file" ""
-        cat >> "$file" <<SQL
-WHERE c.$(pg_ident geoname_id) = $(pg_ident find_geoname_id_by_ip)(p_ip);
-\$\$;
-SQL
-      fi
-    fi
     write_pg_build_location_functions "$file"
+    if [[ -n "$(location_label_expr locale_param include_continent include_iso_code include_emoji)" ]]; then
+      write_pg_location_labels_by_ip_function "$file"
+    else
+      echo "-- build_location_labels_by_ip was not generated because no configured location label columns can be returned." >> "$file"
+      echo >> "$file"
+    fi
     write_pg_location_batch_functions "$file"
   fi
 }
@@ -3720,9 +4706,9 @@ SOURCE 00_create_raw.sql
 SOURCE 10_load_raw.sql
 SOURCE 20_transform_stage.sql
 SOURCE 90_indexes_stage.sql
+SOURCE 100_cleanup_raw.sql
 SOURCE 98_promote.sql
 SOURCE 99_routines.sql
-SOURCE 100_cleanup_raw.sql
 SQL
   else
     cat >> "$file" <<SQL
@@ -3742,6 +4728,7 @@ SQL
 
 write_loader() {
   local file="$RUN_DIR/loader.sh"
+  local db_command_q=""
   if sql_file_append_mode && [[ -f "$file" ]]; then
     debug_log "skip: loader.sh already exists"
     return 0
@@ -3755,9 +4742,87 @@ info() {
   printf '%s\n' "$*"
 }
 
-cd "$(cd -- "$(dirname "$0")" >/dev/null 2>&1 && pwd -P)" || exit
+LOADER_DIR="$(cd -- "$(dirname "$0")" >/dev/null 2>&1 && pwd -P)"
+SQL_FILES=(
+  00_create_raw.sql
+  10_load_raw.sql
+  20_transform_stage.sql
+  90_indexes_stage.sql
+  98_promote.sql
+  99_routines.sql
+  100_cleanup_raw.sql
+  load_data.sql
+)
+SQL_PATHS=()
+for sql_file in "${SQL_FILES[@]}"; do
+  if [[ ! -f "$LOADER_DIR/$sql_file" ]]; then
+    info "Missing generated SQL file: $LOADER_DIR/$sql_file" >&2
+    exit 1
+  fi
+  SQL_PATHS+=("$LOADER_DIR/$sql_file")
+done
+
+# Constraint and index names can survive table promotion. Replace every run ID
+# embedded at generation time so that the same package can be loaded repeatedly.
+GENERATED_RUN_IDS=()
+mapfile -t GENERATED_RUN_IDS < <(
+  awk '
+    {
+      rest = $0
+      while (match(rest, /l[[:digit:]]{12}_[[:digit:]]+/)) {
+        run_id = substr(rest, RSTART, RLENGTH)
+        if (!seen[run_id]++) {
+          print run_id
+        }
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+    }
+  ' "${SQL_PATHS[@]}"
+)
+
+RUNTIME_RUN_IDS=()
+RUN_EPOCH="$(date +%s)"
+printf -v RUN_PID_HEX '%x' "$BASHPID"
+printf -v RUN_EPOCH_HEX '%x' "$RUN_EPOCH"
+for run_index in "${!GENERATED_RUN_IDS[@]}"; do
+  generated_run_id="${GENERATED_RUN_IDS[$run_index]}"
+  printf -v run_sequence_hex '%x' "$((run_index + 1))"
+  runtime_run_id="r${run_sequence_hex}${RUN_PID_HEX}${RUN_EPOCH_HEX}"
+  if (( ${#runtime_run_id} > ${#generated_run_id} )); then
+    runtime_run_id="${runtime_run_id:0:${#generated_run_id}}"
+  fi
+  for existing_run_id in "${RUNTIME_RUN_IDS[@]}"; do
+    if [[ "$runtime_run_id" == "$existing_run_id" ]]; then
+      info "Could not create distinct runtime SQL run IDs" >&2
+      exit 1
+    fi
+  done
+  RUNTIME_RUN_IDS+=("$runtime_run_id")
+done
+
+RUNTIME_SQL_DIR="$(mktemp -d)"
+cleanup_runtime_sql() {
+  local sql_file
+  for sql_file in "${SQL_FILES[@]}"; do
+    rm -f -- "$RUNTIME_SQL_DIR/$sql_file"
+  done
+  rmdir -- "$RUNTIME_SQL_DIR" 2>/dev/null || true
+}
+trap cleanup_runtime_sql EXIT
+
+for sql_file in "${SQL_FILES[@]}"; do
+  while IFS= read -r sql_line || [[ -n "$sql_line" ]]; do
+    for run_index in "${!GENERATED_RUN_IDS[@]}"; do
+      sql_line="${sql_line//${GENERATED_RUN_IDS[$run_index]}/${RUNTIME_RUN_IDS[$run_index]}}"
+    done
+    printf '%s\n' "$sql_line"
+  done < "$LOADER_DIR/$sql_file" > "$RUNTIME_SQL_DIR/$sql_file"
+done
+
+cd "$RUNTIME_SQL_DIR" || exit
 SH
   if [[ "$DBMS" == "mysql" ]]; then
+    printf -v db_command_q '%q' "$MYSQL_COMMAND"
     cat >> "$file" <<SH
 MYSQL_HOST="$MYSQL_HOST"
 MYSQL_PORT="$MYSQL_PORT"
@@ -3766,7 +4831,7 @@ export MYSQL_PWD="\${MYSQL_PWD:-$MYSQL_PASSWORD}"
 START_SECONDS="\$(date +%s)"
 info "Importing..."
 set +e
-$MYSQL_COMMAND --local-infile=1 --host="\$MYSQL_HOST" --port="\$MYSQL_PORT" --user="\$MYSQL_USER" $MYSQL_EXTRA_ARGS < load_data.sql
+$db_command_q --local-infile=1 --host="\$MYSQL_HOST" --port="\$MYSQL_PORT" --user="\$MYSQL_USER" $MYSQL_EXTRA_ARGS < load_data.sql
 STATUS="\$?"
 set -e
 END_SECONDS="\$(date +%s)"
@@ -3779,6 +4844,7 @@ fi
 exit "\$STATUS"
 SH
   else
+    printf -v db_command_q '%q' "$POSTGRESQL_COMMAND"
     cat >> "$file" <<SH
 PGHOST="$POSTGRESQL_HOST"
 PGPORT="$POSTGRESQL_PORT"
@@ -3788,7 +4854,7 @@ export PGPASSWORD="\${PGPASSWORD:-$POSTGRESQL_PASSWORD}"
 START_SECONDS="\$(date +%s)"
 info "Importing..."
 set +e
-$POSTGRESQL_COMMAND --host="\$PGHOST" --port="\$PGPORT" --username="\$PGUSER" --dbname="\$PGDATABASE" -v ON_ERROR_STOP=1 $POSTGRESQL_EXTRA_ARGS -f load_data.sql
+$db_command_q --host="\$PGHOST" --port="\$PGPORT" --username="\$PGUSER" --dbname="\$PGDATABASE" -v ON_ERROR_STOP=1 $POSTGRESQL_EXTRA_ARGS -f load_data.sql
 STATUS="\$?"
 set -e
 END_SECONDS="\$(date +%s)"
